@@ -29,6 +29,9 @@ const std::unordered_set<std::string> cpp_built_in_types = {
     "bool", "char", "double", "float", "long", "short", "int", "void",
 };
 
+const std::vector<std::string> cpp_sign_specifier = {"unsigned", "signed"};
+const std::vector<std::string> cpp_size_specifier = {"short", "long", "long long"};
+
 const std::unordered_set<std::string> access_specifiers = {"public", "protected", "private"};
 
 const std::vector<std::string> overloadable_operators = {
@@ -120,6 +123,14 @@ const std::unordered_set<std::string> cpp_keywords = {
     "virtual",      "volatile",  "wchar_t",    "while",        "xor",
     "xor_eq"};
 
+inline std::string truncate(const std::string &s, int cutoff = 50) {
+    return text_utils::get_substring(s, 0, cutoff) + "...";
+}
+
+inline std::string get_next_part_of_string(const std::string &input, int start, int lookahead = 50) {
+    return text_utils::get_substring(input, start, start + lookahead) + "...";
+}
+
 struct ParseResult {
     ParseResult(bool succeeded, std::string parser_name = "", size_t start = 0, size_t end = 0, std::string match = "",
                 std::vector<ParseResult> sub_results = {})
@@ -143,15 +154,16 @@ struct ParseResult {
             mla.add("start: ", start, ", end: ", end);
             mla.add("match: \"", match, "\"");
 
-            if (!sub_results.empty()) {
-                mla.add("sub_results: [");
-                mla.indent();
-                for (const auto &sub : sub_results) {
-                    recurse(sub);
-                }
-                mla.unindent();
-                mla.add("]");
-            }
+            // TODO: wtf causing infiite
+            // if (!sub_results.empty()) {
+            //     mla.add("sub_results: [");
+            //     mla.indent();
+            //     for (const auto &sub : sub_results) {
+            //         recurse(sub);
+            //     }
+            //     mla.unindent();
+            //     mla.add("]");
+            // }
 
             mla.unindent();
             mla.add("}");
@@ -178,14 +190,59 @@ class CharParser {
 
 using CharParserPtr = std::shared_ptr<CharParser>;
 
+inline void log_start_of_parser(const std::string &name, const std::string &input, size_t start) {
+    logger.debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
+}
+
+class IdentifierParser : public CharParser {
+  public:
+    IdentifierParser() : CharParser("identifier") {}
+
+    ParseResult parse(const std::string &input, size_t start) const override {
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
+
+        size_t pos = start;
+        const size_t len = input.size();
+
+        if (pos >= len) {
+            logger.debug("{} parser failed: start position {} beyond input length {}", name, start, len);
+            return {false, name, start, start, "", {}};
+        }
+
+        char c = input[pos];
+        if (!isIdentifierStartChar(c)) {
+            logger.debug("{} parser failed: first char '{}' at position {} is not valid start char", name, c, pos);
+            return {false, name, start, start, "", {}};
+        }
+
+        ++pos;
+        while (pos < len && isIdentifierContinueChar(input[pos])) {
+            ++pos;
+        }
+
+        std::string matched = input.substr(start, pos - start);
+        logger.debug("{} parser succeeded: matched '{}' from {} to {}", name, matched, start, pos);
+
+        return {true, name, start, pos, std::move(matched), {}};
+    }
+
+  private:
+    static bool isIdentifierStartChar(char c) { return (std::isalpha(static_cast<unsigned char>(c)) || c == '_'); }
+    static bool isIdentifierContinueChar(char c) { return (std::isalnum(static_cast<unsigned char>(c)) || c == '_'); }
+};
+
 class OptionalParser : public CharParser {
   public:
     explicit OptionalParser(std::shared_ptr<CharParser> inner, const std::string &name = "optional")
         : CharParser(name), inner_parser(std::move(inner)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        logger.debug("{} parser started", name);
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
+
         auto result = inner_parser->parse(input, start);
+        logger.debug("{} got out", name);
 
         if (result.succeeded) {
             logger.debug("{} parser: inner parser succeeded, returning {}", name, result.to_string());
@@ -208,15 +265,18 @@ class IfThenParser : public CharParser {
         : CharParser(name), condition(std::move(condition_parser)), then_clause(std::move(then_parser)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        logger.debug("{} parser started", name);
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         auto first_result = condition->parse(input, start);
         if (!first_result.succeeded) {
+            logger.debug("condition failed, stopping");
             return first_result;
         }
-        logger.debug("trying then clause");
+        auto x = then_clause->parse(input, first_result.end);
 
-        return then_clause->parse(input, first_result.end);
+        logger.debug("ran then parser, returning its result");
+        return x;
     }
 
   private:
@@ -224,12 +284,37 @@ class IfThenParser : public CharParser {
     std::shared_ptr<CharParser> then_clause;
 };
 
+// DeferredParser: holds a function returning a parser, the use case is so that we can define recursive parsers without
+// having circular dependencies
+class DeferredParser : public CharParser {
+    // Mutable shared_ptr so it can be assigned later
+    std::shared_ptr<CharParser> actual_parser;
+
+  public:
+    DeferredParser() : CharParser("deferred"), actual_parser(nullptr) {}
+
+    // Setter to assign the actual parser later
+    void set_parser(CharParserPtr parser) { actual_parser = std::move(parser); }
+
+    ParseResult parse(const std::string &input, size_t start) const override {
+
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
+
+        if (!actual_parser) {
+            throw std::runtime_error("DeferredParser: actual parser not set");
+        }
+        return actual_parser->parse(input, start);
+    }
+};
+
 class OptionalWhitespaceParser : public CharParser {
   public:
     OptionalWhitespaceParser() : CharParser("optional_whitespace") {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        logger.debug("Starting OptionalWhitespaceParser at position: {} rest of str: '{}'", start, input.substr(start));
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         size_t i = start;
         while (i < input.size()) {
@@ -244,7 +329,7 @@ class OptionalWhitespaceParser : public CharParser {
         }
 
         logger.debug("OptionalWhitespaceParser ending at position: {}", i);
-        return {true, name, start, i, text_utils::get_substring(input, start, i)};
+        return {true, name, start, i, get_next_part_of_string(input, start)};
     }
 };
 
@@ -254,7 +339,9 @@ class VariableParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
         size_t i = start;
-        logger.debug("Entering parse_variable_name at position {} remaining text: {}", i, input.substr(i));
+
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         if (i >= input.size()) {
             logger.debug("  Empty input or out of bounds");
@@ -286,7 +373,7 @@ class VariableParser : public CharParser {
             return {false, name, i, i, ""};
         }
 
-        return {true, name, start, i, text_utils::get_substring(input, start, i)};
+        return {true, name, start, i, get_next_part_of_string(input, start)};
     }
 };
 
@@ -302,7 +389,9 @@ class TypeParser : public CharParser {
 
     ParseResult parse_type_internal(const std::string &input, size_t start, int depth) const {
         size_t i = start;
-        logger.debug("Entering parse_type at position {} with depth {} : {}", i, depth, input.substr(i));
+
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         while (i < input.size()) {
             char c = input[i];
@@ -352,7 +441,9 @@ class TypeParser : public CharParser {
                             return {true, name, start, i, text_utils::get_substring(input, start, i)};
                         }
                     } else {
-                        logger.debug("    Unexpected character '{}' while parsing type argument list ", input[i]);
+                        logger.debug("    Unexpected character '{}' while parsing type "
+                                     "argument list ",
+                                     input[i]);
                         return {false, name, i, i, ""};
                     }
                 }
@@ -402,7 +493,8 @@ class TypeQualifierSequenceParser : public CharParser {
                                                                    "mutable",   "register",  "inline",   "thread_local",
                                                                    "constexpr", "consteval", "constinit"};
 
-        logger.debug("Starting TypeQualifierParser at position {}", start);
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         size_t i = start;
         std::vector<std::string> found_qualifiers;
@@ -453,7 +545,9 @@ class LiteralParser : public CharParser {
     explicit LiteralParser(std::string literal) : CharParser("literal: " + literal), literal_(std::move(literal)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        logger.debug("Starting LiteralParser at position {}: looking for :'{}'", start, literal_);
+
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         if (start + literal_.size() > input.size()) {
 
@@ -481,15 +575,21 @@ class LiteralParser : public CharParser {
     std::string literal_;
 };
 
-class MatchingBraceParser : public CharParser {
+class MatchingStringPairParser : public CharParser {
   public:
-    MatchingBraceParser(const std::string &name = "matching_braces") : CharParser(name) {};
+    MatchingStringPairParser(const std::string &name = "matching_strings", std::string left_str = "{",
+                             std::string right_str = "}")
+        : CharParser(name), left_str(std::move(left_str)), right_str(std::move(right_str)) {}
+
+    std::string left_str;
+    std::string right_str;
+
     ParseResult parse(const std::string &input, size_t start) const override {
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
-        logger.debug("Starting MatchingBraceParser at position {}", start);
-
-        if (start >= input.size() || input[start] != '{') {
-            logger.debug("  Start character is not '{{', aborting");
+        if (start >= input.size() || !starts_with(input, start, left_str)) {
+            logger.debug("  Start sequence is not '{}', aborting", left_str);
             return {false, name, start, start, ""};
         }
 
@@ -498,98 +598,110 @@ class MatchingBraceParser : public CharParser {
         bool in_char = false;
         bool escape_next = false;
 
-        for (size_t i = start + 1; i < input.size(); ++i) {
+        size_t i = start + left_str.size();
+        while (i < input.size()) {
             char c = input[i];
-            logger.debug("  At position {}, char = {}", i, c);
 
             if (escape_next) {
-                logger.debug(" (escaped)");
                 escape_next = false;
+                ++i;
                 continue;
             }
 
             if (in_string) {
                 if (c == '\\') {
-                    logger.debug(" (escape in string, next char escaped)");
                     escape_next = true;
                 } else if (c == '"') {
-                    logger.debug(" (end of string)");
                     in_string = false;
-                } else {
-                    logger.debug(" (inside string)\n");
                 }
+                ++i;
                 continue;
             }
 
             if (in_char) {
                 if (c == '\\') {
-                    logger.debug(" (escape in char, next char escaped)");
                     escape_next = true;
                 } else if (c == '\'') {
-                    logger.debug(" (end of char)");
                     in_char = false;
-                } else {
-                    logger.debug(" (inside char)");
                 }
+                ++i;
                 continue;
             }
 
             if (c == '"') {
-                logger.debug(" (start of string)");
                 in_string = true;
+                ++i;
                 continue;
             }
 
             if (c == '\'') {
-                logger.debug(" (start of char)");
                 in_char = true;
+                ++i;
                 continue;
             }
 
-            if (c == '{') {
+            if (starts_with(input, i, left_str)) {
                 ++depth;
-                logger.debug(" (open brace, depth = {} )", depth);
-            } else if (c == '}') {
-                --depth;
-                logger.debug(" (close brace, depth = {}", depth);
+                i += left_str.size();
+                continue;
+            }
 
+            if (starts_with(input, i, right_str)) {
+                --depth;
+                i += right_str.size();
                 if (depth == 0) {
-                    size_t end = i + 1;
-                    logger.debug("  Found matching closing brace at position {}", i);
+                    size_t end = i;
+                    logger.debug("  Found matching closing sequence at position {}", end - right_str.size());
                     return {true, name, start, end, text_utils::get_substring(input, start, end)};
                 }
-            } else {
-                std::cout << "\n";
+                continue;
             }
+
+            ++i;
         }
 
-        logger.debug("  Matching closing brace not found");
+        logger.debug("  Matching closing sequence not found");
         return {false, name, start, input.size(), text_utils::get_substring(input, start, input.size())};
+    }
+
+  private:
+    static bool starts_with(const std::string &s, size_t pos, const std::string &prefix) {
+        return s.compare(pos, prefix.size(), prefix) == 0;
     }
 };
 
-class NestedBraceParser : public CharParser {
+class NestedStringPairParser : public CharParser {
   public:
-    NestedBraceParser(CharParserPtr inner_parser, const std::string &name = "nested_brace")
-        : CharParser(name), inner_parser_(std::move(inner_parser)) {}
+    NestedStringPairParser(CharParserPtr inner_parser, const std::string &name = "nested_string",
+                           std::string left_str = "{", std::string right_str = "}")
+        : CharParser(name), inner_parser_(std::move(inner_parser)), left_str(std::move(left_str)),
+          right_str(std::move(right_str)) {}
+
+    std::string left_str, right_str;
 
     ParseResult parse(const std::string &input, size_t start) const override {
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
-        logger.debug("Running NestedBraceParser starting at {}", start);
-
-        MatchingBraceParser brace_parser;
-        ParseResult outer_result = brace_parser.parse(input, start);
+        MatchingStringPairParser match_parser(name, left_str, right_str);
+        ParseResult outer_result = match_parser.parse(input, start);
 
         if (!outer_result.succeeded) {
-            logger.debug("  Outer brace parse failed");
+            logger.debug("  Outer string parse failed");
             return {false, name, start, start, ""};
         }
 
-        // Extract inner content (excluding outer braces)
-        std::string inner_text = outer_result.match.substr(1, outer_result.match.size() - 2);
+        // Extract inner content excluding outer delimiters
+        if (outer_result.match.size() < left_str.size() + right_str.size()) {
+            logger.debug("  Match too small to contain delimiters");
+            return {false, name, start, start, ""};
+        }
+
+        std::string inner_text =
+            outer_result.match.substr(left_str.size(), outer_result.match.size() - left_str.size() - right_str.size());
         size_t inner_start = 0;
 
-        logger.debug("  Inner content to parse: {}", inner_text);
+        logger.debug("  Inner content to parse: {}", truncate(inner_text));
 
         ParseResult inner_result = inner_parser_->parse(inner_text, inner_start);
 
@@ -598,9 +710,9 @@ class NestedBraceParser : public CharParser {
             return {false, name, start, start, ""};
         }
 
-        // Adjust inner start and end to be in terms of the original input string
-        inner_result.start += outer_result.start + 1;
-        inner_result.end += outer_result.start + 1;
+        // Adjust inner result's positions relative to the original input
+        inner_result.start += outer_result.start + left_str.size();
+        inner_result.end += outer_result.start + left_str.size();
 
         return {
             true,
@@ -625,8 +737,12 @@ class UntilCharParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        logger.debug("Starting UntilCharParser at position {} , looking for any target character {}", start,
-                     (ignore_in_strings_and_chars_ ? " outside of strings and chars" : ""));
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
+
+        logger.debug("Starting UntilCharParser at position {} , looking for any target "
+                     "character {}",
+                     start, (ignore_in_strings_and_chars_ ? " outside of strings and chars" : ""));
 
         bool in_string = false;
         bool in_char = false;
@@ -700,7 +816,8 @@ class UntilCharParser : public CharParser {
     bool ignore_in_strings_and_chars_;
 };
 
-// a repeating parser attempts to repeatedly parse something until the parsing fails using the passed in parser
+// a repeating parser attempts to repeatedly parse something until the parsing
+// fails using the passed in parser
 class RepeatingParser : public CharParser {
   public:
     explicit RepeatingParser(std::shared_ptr<CharParser> inner_parser, const std::string &name = "repeating")
@@ -710,7 +827,8 @@ class RepeatingParser : public CharParser {
         size_t current = start;
         bool matched_once = false;
 
-        logger.debug("{} repeating parser started", name);
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         std::vector<ParseResult> results;
 
@@ -754,12 +872,20 @@ class AnyOfParser : public CharParser {
         : CharParser(name), parsers(std::move(sub_parsers)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
+        // logger.debug("{} any of parser started at position {}", name, start);
+
         for (const auto &parser : parsers) {
+            // logger.debug("{} trying sub-parser '{}'", name, parser->name);
             auto result = parser->parse(input, start);
             if (result.succeeded) {
+                // logger.debug("{} sub-parser '{}' succeeded with match '{}'", name, parser->name, result.match);
                 return result;
+            } else {
+                // logger.debug("{} sub-parser '{}' failed", name, parser->name);
             }
         }
+
+        // logger.debug("{} parser failed: no sub-parsers matched at position {}", name, start);
         return {false, name, start, start, ""};
     }
 
@@ -774,12 +900,8 @@ class SequenceParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        logger.debug("{} sequence parser started", name);
-
-        logger.debug("it contains: ");
-        for (const auto &parser : parsers_) {
-            logger.debug("{}", parser->name);
-        }
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
 
         size_t current = start;
 
@@ -803,20 +925,36 @@ class SequenceParser : public CharParser {
 
 // helper to create parsers easier
 CharParserPtr optional_whitespace();
+CharParserPtr identifier();
 CharParserPtr variable();
-CharParserPtr type();
+CharParserPtr base_type();
 CharParserPtr type_qualifier_sequence();
 CharParserPtr until_char(std::vector<char> target_chars, bool inclusive = true, bool ignore_in_strings_and_chars = true,
                          const std::string &name = "");
+
 CharParserPtr literal(const std::string &s);
-CharParserPtr matching_braces(const std::string &name = "");
-CharParserPtr nested_braces(CharParserPtr parser, const std::string &name = "");
-CharParserPtr repeating(CharParserPtr parser, const std::string &name = "");
-CharParserPtr optional(CharParserPtr parser, const std::string &name = "");
+
+inline std::vector<CharParserPtr> create_literal_parsers(std::vector<std::string> literals) {
+    std::vector<CharParserPtr> ls;
+    for (const auto &l : literals) {
+        auto lp = literal(l);
+        ls.push_back(lp);
+    }
+    return ls;
+}
+
+CharParserPtr matching_string_pair(const std::string &name = "matching_braces", std::string left = "{",
+                                   std::string right = "}");
+CharParserPtr nested_string_pair(CharParserPtr parser, const std::string &name = "nested_braces",
+                                 std::string left = "{", std::string right = "}");
+CharParserPtr repeating(CharParserPtr parser, const std::string &name = "repeating");
+CharParserPtr optional(CharParserPtr parser, const std::string &name = "optional");
+CharParserPtr deferred();
 CharParserPtr if_then(std::shared_ptr<CharParser> condition_parser, std::shared_ptr<CharParser> then_parser,
-                      const std::string &name = "");
-CharParserPtr any_of(std::vector<CharParserPtr> parsers, const std::string &name = "");
-CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "");
+                      const std::string &name = "if_then");
+CharParserPtr any_of(std::vector<CharParserPtr> parsers, const std::string &name = "any_of");
+CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "sequence");
+
 // === TESTING ===
 
 inline void test_parser(const std::string &input, const CharParserPtr &parser) {
@@ -846,14 +984,37 @@ inline std::vector<CharParserPtr> whitespace_between(const std::vector<CharParse
     return result;
 }
 
+// TODO: should this be a class? why or why not.
+inline CharParserPtr comma_separated_sequence_parser(CharParserPtr element_parser) {
+
+    CharParserPtr after_the_first_element_parser =
+        optional(repeating(sequence(whitespace_between({literal(","), element_parser}),
+                                    "comma_element_" + element_parser->name)),
+                 "after_the_first_element_parser");
+
+    // NOTE: we do optional here, because we allow the empty sequence to be valid
+    CharParserPtr optional_element_parser =
+        optional(if_then(sequence(whitespace_between({element_parser})), after_the_first_element_parser,
+                         "one_or_more_element_" + element_parser->name),
+                 "optional_elements");
+
+    return optional_element_parser;
+}
+
 std::string remove_comments_from_file(const std::string &filename);
 
 std::unordered_map<std::string, std::vector<std::string>>
-collect_matches_by_parser_name(const ParseResult &result, const std::vector<std::string> &target_names);
+collect_matches_by_parser_name(const ParseResult &result, const std::vector<std::string> &target_names = {});
 
-inline CharParserPtr assignment_parser = sequence(
-    whitespace_between({optional(type_qualifier_sequence()), type(), variable(), literal("="), until_char({';'})}),
-    "assignment");
+// inline CharParserPtr template_name =
+
+// #ifndef M_PI
+// #define M_PI 3.14159265358979323846
+// #endif
+
+// TODO: to support the above we need support for until_literal
+inline CharParserPtr macro_if_statement = sequence({});
+
 // assignment_parser->name = "assignment";
 //
 inline CharParserPtr system_include_parser = sequence(whitespace_between({literal("#include"), sequence({
@@ -869,23 +1030,62 @@ inline CharParserPtr local_include_parser =
 inline CharParserPtr default_value_for_parameter_suffix_parser =
     sequence(whitespace_between({literal("="), until_char({',', ')'}, false)}), "default_value_for_parameter_suffix");
 
-inline CharParserPtr type_with_optional_reference =
-    sequence({type(), optional(literal(" &"))}, "type_with_optional_reference");
+// https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/n4950.pdf section 9.2.1
+// NOTE: not fully implemented yet
+// inline CharParserPtr declaration_specifier_sequence_parser = ;
+//
+
+inline CharParserPtr optionally_namespaced_identifier() {
+    return sequence({optional(sequence({identifier(), literal("::")})), identifier()});
+}
+
+inline CharParserPtr optional_reference_or_pointer() { return optional(any_of(create_literal_parsers({"*", "&"}))); };
+
+inline CharParserPtr add_optional_type_surroundings(CharParserPtr base_parser) {
+    return sequence(
+        whitespace_between({optional(literal("const")), optional(any_of(create_literal_parsers(cpp_sign_specifier))),
+                            optional(any_of(create_literal_parsers(cpp_size_specifier))), base_parser,
+                            optional_reference_or_pointer()}),
+        "type_with_optional_reference for " + base_parser->name);
+}
+
+CharParserPtr get_templated_type_parser();
+
+// TODO: Delete this.
+inline CharParserPtr lambda_type_parser() {
+    return sequence({literal("std::function<"), get_templated_type_parser(),
+                     nested_string_pair(comma_separated_sequence_parser(get_templated_type_parser()),
+                                        "lambda_parameters", "(", ")"),
+                     until_char({'>'})},
+                    "lambda_type");
+}
+
+inline CharParserPtr full_non_recursive_type = add_optional_type_surroundings(optionally_namespaced_identifier());
+
+// NOTE: the order in which this is parsed matters a lot, because given something like std::function<void(int)>, if we
+// run the non recurisve type on this we'd find up to std::function, instead we want most specific to least specific I
+// thinki
+inline CharParserPtr type = add_optional_type_surroundings(get_templated_type_parser());
+
+inline CharParserPtr assignment_parser =
+    sequence(whitespace_between({type, variable(), literal("="), until_char({';'})}), "assignment");
 
 inline CharParserPtr parameter_parser =
-    sequence(whitespace_between({optional(type_qualifier_sequence()), type_with_optional_reference, variable(),
+    sequence(whitespace_between({optional(type_qualifier_sequence()), type, variable(),
                                  optional(default_value_for_parameter_suffix_parser)}),
              "parameter");
-// parameter_parser->name = "parameter";
 
 inline CharParserPtr optional_parameter_sequence =
-    optional(repeating(sequence({literal(","), parameter_parser})), "optional_parameter_sequence");
+    optional(repeating(sequence({literal(","), parameter_parser}, "comma_parameter"), "repeating_parameter_sequence"),
+             "optional_parameter_sequence");
+
+// TODO: need to turn this into it's own thing which is an optional comma separated sequence, I want to create a class
+// out of this, what we do is that we pass in an element parser, and it does this logic.
 inline CharParserPtr optional_parameters =
-    optional(if_then(parameter_parser, optional_parameter_sequence), "optional_parameters");
+    optional(if_then(parameter_parser, optional_parameter_sequence, "one_or_more_parameter"), "optional_parameters");
 
 inline CharParserPtr parameter_tuple_parser =
     sequence(whitespace_between({literal("("), optional_parameters, literal(")")}), "parameter_tuple");
-//   parameter_tuple_parser->name = "parameter_tuple";
 
 inline std::vector<CharParserPtr> make_operator_literals() {
     std::vector<CharParserPtr> result;
@@ -898,18 +1098,34 @@ inline std::vector<CharParserPtr> make_operator_literals() {
 
 inline std::vector<CharParserPtr> operator_literals = make_operator_literals();
 
-inline CharParserPtr base_function_signature_parser = sequence(whitespace_between({
-                                                                   type_with_optional_reference,
-                                                                   any_of({variable(), any_of(operator_literals)}),
-                                                               }),
-                                                               "base_function_signature");
+inline CharParserPtr optionally_namespaced_variable_parser =
+    sequence({optional(sequence({variable(), literal("::")})), variable()}, "optionally_namespaced_variable");
 
+inline CharParserPtr function_invocation =
+    sequence(whitespace_between({optionally_namespaced_variable_parser, matching_string_pair("parens", "(", ")")}),
+             "function_invocation");
+
+inline CharParserPtr initializer_list_parser =
+    sequence({literal(":"), comma_separated_sequence_parser(function_invocation)}, "initializer_list");
+
+inline CharParserPtr constructor_def_parser = sequence({optionally_namespaced_variable_parser, parameter_tuple_parser,
+                                                        optional(initializer_list_parser), matching_string_pair()},
+                                                       "constructor_def_parser");
+
+inline CharParserPtr base_function_signature_parser =
+    sequence(whitespace_between({
+                 type,
+                 any_of({optionally_namespaced_variable_parser, any_of(operator_literals)}),
+             }),
+             "base_function_signature");
+
+// TOOD: give the optional const thing a name
 inline CharParserPtr function_signature_parser =
-    sequence(whitespace_between({base_function_signature_parser, parameter_tuple_parser}));
-//   function_parser->name = "function";
+    sequence(whitespace_between({base_function_signature_parser, parameter_tuple_parser, optional(literal("const"))}),
+             "function_signature");
 
-inline CharParserPtr function_def_parser = sequence(whitespace_between({parameter_tuple_parser, matching_braces()}));
-//   function_def_parser->name = "function_def";
+inline CharParserPtr function_def_parser =
+    sequence(whitespace_between({function_signature_parser, matching_string_pair()}), "function_def");
 
 inline const std::vector<CharParserPtr> access_specifier_parsers = [] {
     std::vector<CharParserPtr> result;
@@ -926,8 +1142,8 @@ inline const CharParserPtr class_inheritance_parser =
     sequence(whitespace_between({literal(":"), access_specifier_parser, variable()}), "class_inheritance");
 
 inline CharParserPtr class_def_parser =
-    sequence(whitespace_between(
-                 {literal("class"), variable(), optional(class_inheritance_parser), matching_braces(), literal(";")}),
+    sequence(whitespace_between({literal("class"), variable(), optional(class_inheritance_parser),
+                                 matching_string_pair(), literal(";")}),
              "class_def");
 
 inline CharParserPtr using_statement_parser = sequence(
@@ -935,20 +1151,21 @@ inline CharParserPtr using_statement_parser = sequence(
         literal("using"),
         variable(),
         literal("="),
-        type(),
+        base_type(),
         literal(";"),
     },
     "using_statement");
 
 inline CharParserPtr struct_def_parser =
-    sequence(whitespace_between({literal("struct"), variable(), matching_braces(), literal(";")}), "struct_def");
+    sequence(whitespace_between({literal("struct"), variable(), matching_string_pair(), literal(";")}), "struct_def");
 
-inline CharParserPtr source_file_body_parser = repeating(
-    any_of({function_def_parser, assignment_parser, class_def_parser, struct_def_parser, using_statement_parser}),
-    "source_file_body");
+inline CharParserPtr source_file_body_parser =
+    repeating(any_of({function_def_parser, constructor_def_parser, assignment_parser, class_def_parser,
+                      struct_def_parser, using_statement_parser}),
+              "source_file_body");
 
 inline CharParserPtr source_file_namespace_body_parser =
-    sequence(whitespace_between({literal("namespace"), variable(), nested_braces(source_file_body_parser)}),
+    sequence(whitespace_between({literal("namespace"), variable(), nested_string_pair(source_file_body_parser)}),
              "source_file_namespace_body");
 
 inline CharParserPtr source_file_header_parser =
@@ -958,33 +1175,64 @@ inline CharParserPtr source_file_parser = sequence(
     {optional(source_file_header_parser), any_of({source_file_namespace_body_parser, source_file_body_parser})},
     "source_file");
 
+std::unordered_map<std::string, std::vector<std::string>>
+get_parser_name_to_matches_for_source_file(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path);
 
 inline void test() {
-    test_parser("std::unordered_map<std::string, std::vector<std::string>>", type());
-    test_parser(" int x ", parameter_parser);
-    test_parser("  (int x, int y) ", parameter_tuple_parser);
-    test_parser("  int add(int x, int y) ", function_signature_parser);
-    test_parser("  int add(int x, int y) { return x + y; } ", function_def_parser);
-    test_parser("  std::optional<int> opt_mul(int x, int y) ", function_signature_parser);
+    // test_parser("std::unordered_map<std::string, std::vector<std::string>>",
+    //             type());
+    // test_parser(" int x ", parameter_parser);
+    // test_parser("  (int x, int y) ", parameter_tuple_parser);
+    // test_parser("abc123", identifier());
+    // test_parser("3bc123", identifier());
+    // test_parser("const std::unordered_map<std::vector<std::string>, const unsigned int>",
+    // get_templated_type_parser());
 
-    test_parser("  int x = 5;", assignment_parser);
-    test_parser("  std::vector<int> x = 5;", assignment_parser);
-    test_parser("  std::vector<std::vector<std::string>> x = 6;",
-                assignment_parser); // success
+    // test_parser("std::function<glm::vec3(double)>", lambda_type_parser());
+    test_parser("std::function<glm::vec3(double)>", type);
+    // test_parser("std::function<glm::vec3(double)> f", parameter_parser);
 
-    test_parser("std::unordered_map<std::string, std::vector<std::string>> collect_matches_by_parser_name(const "
-                "ParseResult &result, const std::vector<std::string> &target_names) ",
-                function_signature_parser); // success
-
-    test_parser("  std::vector<std::vector<std::string>> x = \"test;test\";", assignment_parser);
-    test_parser("  _private = count123", assignment_parser);
-    test_parser("  CONST_THING = variable_123", assignment_parser);
-    test_parser("  foo = bar", assignment_parser);
-    test_parser("foo=123", assignment_parser);     // 123 is not a variable
-    test_parser("int = value", assignment_parser); // "int" is a keyword -> reject
-    test_parser(" _var = _x2", assignment_parser);
-    test_parser("foo bar", assignment_parser); // fail (missing '=')
+    // // TODO: was figuring out why this doesn't work., is the comment removing it no...
+    // test_parser(" glm::vec3 compute_tangent_finite_difference(std::function<glm::vec3(double)> f, double t, double "
+    //             "delta) { glm::vec3 forward = f(t + delta); glm::vec3 backward = f(t - delta); return (forward - "
+    //             "backward) / static_cast<float>(2.0f * delta); // central difference } ",
+    //             function_def_parser);
+    //
+    // test_parser("std::vector<Rectangle> vertical_weighted_subdivision(const Rectangle &rect, const "
+    //             "std::vector<unsigned int> &weights) { return weighted_subdivision(rect, weights); }",
+    //             function_def_parser);
+    //
+    // test_parser("Grid::Grid(int rows, int cols, float width, float height, float origin_x, float origin_y, float "
+    //             "origin_z) : rows(rows), cols(cols), grid_width(width), grid_height(height), origin_x(origin_x), "
+    //             "origin_y(origin_y), origin_z(origin_z), rect_width(width / cols), rect_height(height / rows) {}",
+    //             constructor_def_parser);
+    // test_parser("  int add(int x, int y) ", function_signature_parser);
+    // test_parser("  int add(int x, int y) { return x + y; } ",
+    //             function_def_parser);
+    // test_parser("  std::optional<int> opt_mul(int x, int y) ",
+    //             function_signature_parser);
+    //
+    // test_parser("  int x = 5;", assignment_parser);
+    // test_parser("  std::vector<int> x = 5;", assignment_parser);
+    // test_parser("  std::vector<std::vector<std::string>> x = 6;",
+    //             assignment_parser); // success
+    //
+    // test_parser(
+    //     "std::unordered_map<std::string, std::vector<std::string>> "
+    //     "collect_matches_by_parser_name(const "
+    //     "ParseResult &result, const std::vector<std::string> &target_names) ",
+    //     function_signature_parser); // success
+    //
+    // test_parser("  std::vector<std::vector<std::string>> x = \"test;test\";",
+    //             assignment_parser);
+    // test_parser("  _private = count123", assignment_parser);
+    // test_parser("  CONST_THING = variable_123", assignment_parser);
+    // test_parser("  foo = bar", assignment_parser);
+    // test_parser("foo=123", assignment_parser);     // 123 is not a variable
+    // test_parser("int = value", assignment_parser); // "int" is a keyword -> reject
+    // test_parser(" _var = _x2", assignment_parser);
+    // test_parser("foo bar", assignment_parser); // fail (missing '=')
 
     // try {
     //     std::string commentless_code = remove_comments_from_file("main.cpp");
@@ -995,8 +1243,10 @@ inline void test() {
     //     test_parser(flattened, source_file_parser);
     //
     //     ParseResult root = source_file_parser->parse(flattened, 0);
-    //     std::vector<std::string> target_parsers = {function_def_parser->name, assignment_parser->name,
-    //                                                struct_def_parser->name, class_def_parser->name};
+    //     std::vector<std::string> target_parsers = {function_def_parser->name,
+    //     assignment_parser->name,
+    //                                                struct_def_parser->name,
+    //                                                class_def_parser->name};
     //     auto match_map = collect_matches_by_parser_name(root, target_parsers);
     //
     //     for (const auto &[name, matches] : match_map) {

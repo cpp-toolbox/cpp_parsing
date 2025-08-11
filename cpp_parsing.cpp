@@ -25,8 +25,9 @@ std::ostream &print_parse_result(std::ostream &os, const ParseResult &result, in
 std::ostream &operator<<(std::ostream &os, const ParseResult &result) { return print_parse_result(os, result); }
 
 CharParserPtr optional_whitespace() { return std::make_shared<OptionalWhitespaceParser>(); }
+CharParserPtr identifier() { return std::make_shared<IdentifierParser>(); }
 CharParserPtr variable() { return std::make_shared<VariableParser>(); }
-CharParserPtr type() { return std::make_shared<TypeParser>(); }
+CharParserPtr base_type() { return std::make_shared<TypeParser>(); }
 CharParserPtr type_qualifier_sequence() { return std::make_shared<TypeQualifierSequenceParser>(); }
 
 CharParserPtr until_char(std::vector<char> target_chars, bool inclusive, bool ignore_in_strings_and_chars,
@@ -36,10 +37,11 @@ CharParserPtr until_char(std::vector<char> target_chars, bool inclusive, bool ig
 
 CharParserPtr literal(const std::string &s) { return std::make_shared<LiteralParser>(s); }
 
-CharParserPtr matching_braces(const std::string &name) { return std::make_shared<MatchingBraceParser>(name); }
-
-CharParserPtr nested_braces(CharParserPtr parser, const std::string &name) {
-    return std::make_shared<NestedBraceParser>(parser, name);
+CharParserPtr matching_string_pair(const std::string &name, std::string left, std::string right) {
+    return std::make_shared<MatchingStringPairParser>(name, left, right);
+}
+CharParserPtr nested_string_pair(CharParserPtr parser, const std::string &name, std::string left, std::string right) {
+    return std::make_shared<NestedStringPairParser>(parser, name, left, right);
 }
 
 CharParserPtr repeating(CharParserPtr parser, const std::string &name) {
@@ -49,6 +51,8 @@ CharParserPtr repeating(CharParserPtr parser, const std::string &name) {
 CharParserPtr optional(CharParserPtr parser, const std::string &name) {
     return std::make_shared<OptionalParser>(parser, name);
 }
+
+CharParserPtr deferred() { return std::make_shared<DeferredParser>(); }
 
 CharParserPtr if_then(std::shared_ptr<CharParser> condition_parser, std::shared_ptr<CharParser> then_parser,
                       const std::string &name) {
@@ -103,9 +107,10 @@ std::unordered_map<std::string, std::vector<std::string>>
 collect_matches_by_parser_name(const ParseResult &result, const std::vector<std::string> &target_names) {
     std::unordered_map<std::string, std::vector<std::string>> matches;
     std::unordered_set<std::string> target_set(target_names.begin(), target_names.end());
+    bool restrict = !target_names.empty();
 
     std::function<void(const ParseResult &)> recurse = [&](const ParseResult &res) {
-        if (res.succeeded && target_set.count(res.parser_name)) {
+        if (res.succeeded && (!restrict || target_set.count(res.parser_name))) {
             matches[res.parser_name].push_back(res.match);
         }
         for (const auto &sub : res.sub_results) {
@@ -117,46 +122,68 @@ collect_matches_by_parser_name(const ParseResult &result, const std::vector<std:
     return matches;
 }
 
-// TODO: was figuring out why this function doesn't work even though we tested it previously
+std::unordered_map<std::string, std::vector<std::string>>
+get_parser_name_to_matches_for_source_file(const std::string &source_code_path) {
+    try {
+        std::string commentless_code = remove_comments_from_file(source_code_path);
+        std::string flattened = text_utils::remove_newlines(commentless_code);
+        flattened = text_utils::collapse_whitespace(flattened);
+
+        ParseResult root = source_file_parser->parse(flattened, 0);
+
+        auto match_map = collect_matches_by_parser_name(root);
+        return match_map;
+    } catch (const std::exception &e) {
+        std::cerr << "Error inget_parser_name_to_matches_for_source_file: " << e.what() << '\n';
+        return {};
+    }
+}
 
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path) {
     try {
-        std::cout << "extract_top_level_functions" << std::endl;
-        std::cout << source_code_path << std::endl;
-        // Remove comments and flatten whitespace
-        std::cout << "-3" << std::endl;
-        std::string commentless_code = remove_comments_from_file(source_code_path);
-        std::cout << "-2" << std::endl;
-        std::string flattened = text_utils::remove_newlines(commentless_code);
-        std::cout << "-1" << std::endl;
-        flattened = text_utils::collapse_whitespace(flattened);
-        std::cout << "0" << std::endl;
-
-        // Optional debug
-        // std::cout << flattened << std::endl;
-
-        // Parse
-        ParseResult root = source_file_parser->parse(flattened, 0);
-        std::cout << "1" << std::endl;
-
-        // Collect top-level functions
-        std::vector<std::string> target_parsers = {function_def_parser->name};
-        auto match_map = collect_matches_by_parser_name(root, target_parsers);
-        std::cout << "2" << std::endl;
+        auto match_map = get_parser_name_to_matches_for_source_file(source_code_path);
 
         auto it = match_map.find(function_def_parser->name);
         if (it != match_map.end()) {
-
-            std::cout << "3" << std::endl;
             return it->second;
         }
-        std::cout << "4" << std::endl;
 
         return {}; // No matches found
     } catch (const std::exception &e) {
         std::cerr << "Error in extract_top_level_functions: " << e.what() << '\n';
         return {};
     }
+}
+
+CharParserPtr get_templated_type_parser() {
+    auto templated_type_recursive_placeholder = std::make_shared<DeferredParser>();
+
+    CharParserPtr templated_type_parameter_list = sequence(
+        {templated_type_recursive_placeholder,
+         optional(repeating(sequence(whitespace_between({literal(","), templated_type_recursive_placeholder}))))},
+        "templated_type_parameter_list");
+
+    full_non_recursive_type->name = "non_templated_type";
+
+    CharParserPtr templated_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
+        {optionally_namespaced_identifier(), literal("<"), templated_type_parameter_list, literal(">")})));
+
+    CharParserPtr lambda_function_signature_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
+        {templated_type_recursive_placeholder, literal("("), templated_type_parameter_list, literal(")")})));
+    lambda_function_signature_type_parser->name = "lambda_function_signature_type_parser";
+
+    CharParserPtr lambda_function_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
+        {literal("std::function"), literal("<"), lambda_function_signature_type_parser, literal(">")})));
+    lambda_function_type_parser->name = "lambda_function_type_parser";
+
+    CharParserPtr templated_type =
+        any_of({templated_type_parser, lambda_function_type_parser, full_non_recursive_type}, // base case
+               "templated_type");
+
+    // NOTE: define its inner content after the fact to avoid circular dependencies
+    templated_type_recursive_placeholder->set_parser(templated_type);
+
+    return templated_type;
 }
 
 } // namespace cpp_parsing
