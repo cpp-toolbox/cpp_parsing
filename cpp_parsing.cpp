@@ -124,7 +124,7 @@ collect_matches_by_parser_name(const ParseResult &result, const std::vector<std:
 
 std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path) {
-    logger.disable_all_levels();
+    // logger.disable_all_levels();
     try {
         std::string commentless_code = remove_comments_from_file(source_code_path);
         std::string flattened = text_utils::remove_newlines(commentless_code);

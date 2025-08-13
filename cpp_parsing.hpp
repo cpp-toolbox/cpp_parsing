@@ -1042,11 +1042,15 @@ inline CharParserPtr optionally_namespaced_identifier() {
 inline CharParserPtr optional_reference_or_pointer() { return optional(any_of(create_literal_parsers({"*", "&"}))); };
 
 inline CharParserPtr add_optional_type_surroundings(CharParserPtr base_parser) {
-    return sequence(
-        whitespace_between({optional(literal("const")), optional(any_of(create_literal_parsers(cpp_sign_specifier))),
-                            optional(any_of(create_literal_parsers(cpp_size_specifier))), base_parser,
-                            optional_reference_or_pointer()}),
-        "type_with_optional_reference for " + base_parser->name);
+    return sequence(whitespace_between(
+                        {optional(literal("const")), optional(any_of(create_literal_parsers(cpp_sign_specifier))),
+                         any_of({sequence({optional(any_of(create_literal_parsers(cpp_size_specifier))), base_parser}),
+                                 // NOTE: this one represents the fact that short short is a valid type representing
+                                 // short short int making int an optional thing.
+                                 if_then(any_of({create_literal_parsers(cpp_size_specifier)}), optional(base_parser))}),
+
+                         optional_reference_or_pointer()}),
+                    "type_with_optional_reference for " + base_parser->name);
 }
 
 CharParserPtr get_templated_type_parser();
