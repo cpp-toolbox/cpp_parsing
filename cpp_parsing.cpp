@@ -141,6 +141,7 @@ get_parser_name_to_matches_for_source_file(const std::string &source_code_path) 
 }
 
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path) {
+    logger.disable_all_levels();
     try {
         auto match_map = get_parser_name_to_matches_for_source_file(source_code_path);
 
