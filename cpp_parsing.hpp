@@ -23,7 +23,7 @@
 
 namespace cpp_parsing {
 
-inline ConsoleLogger logger("cpp_parsing");
+inline Logger logger("cpp_parsing");
 
 const std::unordered_set<std::string> cpp_built_in_types = {
     "bool", "char", "double", "float", "long", "short", "int", "void",
@@ -181,7 +181,7 @@ class CharParser {
   public:
     explicit CharParser(std::string name = "") : name(std::move(name)) {}
 
-    virtual ParseResult parse(const std::string &input, size_t start) const = 0;
+    virtual ParseResult parse(const std::string &input, size_t start = 0) const = 0;
 
     virtual ~CharParser() = default;
 
