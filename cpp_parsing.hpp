@@ -173,6 +173,9 @@ struct ParseResult {
     }
 };
 
+ParseResult clean_parse_result(const ParseResult &r);
+
+// deprecated for the to_string funciton remove soon.
 std::ostream &print_parse_result(std::ostream &os, const ParseResult &result, int indent = 0);
 std::ostream &operator<<(std::ostream &os, const ParseResult &result);
 
@@ -327,8 +330,8 @@ class OptionalWhitespaceParser : public CharParser {
             }
         }
 
-        logger.debug("OptionalWhitespaceParser ending at position: {}", i);
-        return {true, name, start, i, get_next_part_of_string(input, start)};
+        std::string ws = input.substr(start, i - start);
+        return {true, name, start, i, ws};
     }
 };
 
@@ -372,7 +375,7 @@ class VariableParser : public CharParser {
             return {false, name, i, i, ""};
         }
 
-        return {true, name, start, i, get_next_part_of_string(input, start)};
+        return {true, name, start, i, var_name};
     }
 };
 

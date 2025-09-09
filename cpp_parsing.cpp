@@ -2,6 +2,25 @@
 
 namespace cpp_parsing {
 
+ParseResult clean_parse_result(const ParseResult &r) {
+    // Copy the current result
+    ParseResult cleaned = r;
+
+    // Recursively clean children
+    std::vector<ParseResult> new_sub_results;
+    new_sub_results.reserve(cleaned.sub_results.size());
+
+    for (const auto &sub : cleaned.sub_results) {
+        // Only keep if it actually matched something
+        if (sub.start != sub.end) {
+            new_sub_results.push_back(clean_parse_result(sub));
+        }
+    }
+
+    cleaned.sub_results = std::move(new_sub_results);
+    return cleaned;
+}
+
 std::ostream &print_parse_result(std::ostream &os, const ParseResult &result, int indent) {
     std::string indent_str(indent * 2, ' ');
     os << indent_str << "ParseResult {\n";
