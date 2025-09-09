@@ -149,21 +149,20 @@ struct ParseResult {
         std::function<void(const ParseResult &)> recurse = [&](const ParseResult &r) {
             mla.add("ParseResult {");
             mla.indent();
-            mla.add("succeeded: ", (succeeded ? "true" : "false"));
-            mla.add("parser_name: \"", parser_name, "\"");
-            mla.add("start: ", start, ", end: ", end);
-            mla.add("match: \"", match, "\"");
+            mla.add("succeeded: ", (r.succeeded ? "true" : "false"));
+            mla.add("parser_name: \"", r.parser_name, "\"");
+            mla.add("start: ", r.start, ", end: ", r.end);
+            mla.add("match: \"", r.match, "\"");
 
-            // TODO: wtf causing infiite
-            // if (!sub_results.empty()) {
-            //     mla.add("sub_results: [");
-            //     mla.indent();
-            //     for (const auto &sub : sub_results) {
-            //         recurse(sub);
-            //     }
-            //     mla.unindent();
-            //     mla.add("]");
-            // }
+            if (!r.sub_results.empty()) {
+                mla.add("sub_results: [");
+                mla.indent();
+                for (const auto &sub : r.sub_results) {
+                    recurse(sub);
+                }
+                mla.unindent();
+                mla.add("]");
+            }
 
             mla.unindent();
             mla.add("}");
@@ -1074,6 +1073,9 @@ inline CharParserPtr type = add_optional_type_surroundings(get_templated_type_pa
 inline CharParserPtr assignment_parser =
     sequence(whitespace_between({type, variable(), literal("="), until_char({';'})}), "assignment");
 
+inline CharParserPtr declaration_parser =
+    sequence(whitespace_between({type, variable(), until_char({';'})}), "declaration");
+
 inline CharParserPtr parameter_parser =
     sequence(whitespace_between({optional(type_qualifier_sequence()), type, variable(),
                                  optional(default_value_for_parameter_suffix_parser)}),
@@ -1145,10 +1147,20 @@ inline const CharParserPtr access_specifier_parser = any_of(access_specifier_par
 inline const CharParserPtr class_inheritance_parser =
     sequence(whitespace_between({literal(":"), access_specifier_parser, variable()}), "class_inheritance");
 
+// NOTE: this is hollow
 inline CharParserPtr class_def_parser =
     sequence(whitespace_between({literal("class"), variable(), optional(class_inheritance_parser),
                                  matching_string_pair(), literal(";")}),
              "class_def");
+
+// NOTE: doesn't yet support nested classes.
+inline CharParserPtr class_def_parser_good = sequence(
+    whitespace_between({literal("class"), variable(), optional(class_inheritance_parser),
+                        nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
+                                                             sequence(whitespace_between({literal("private:")})),
+                                                             assignment_parser, declaration_parser}))),
+                        literal(";")}),
+    "class_def");
 
 inline CharParserPtr using_statement_parser = sequence(
     {
