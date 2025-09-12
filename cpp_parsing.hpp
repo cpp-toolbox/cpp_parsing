@@ -175,6 +175,18 @@ struct ParseResult {
 
 ParseResult clean_parse_result(const ParseResult &r);
 
+const cpp_parsing::ParseResult *find_first_by_name(const cpp_parsing::ParseResult *root, const std::string &target);
+
+// Find any node whose parser_name contains substring `substr`. Example: "type_with_optional_reference".
+const cpp_parsing::ParseResult *find_first_name_contains(const cpp_parsing::ParseResult *root,
+                                                         const std::string &substr);
+
+// Collect all nodes with parser_name == target (DFS)
+void collect_by_name(const cpp_parsing::ParseResult *root, const std::string &target,
+                     std::vector<const cpp_parsing::ParseResult *> &out);
+
+std::string node_text(const cpp_parsing::ParseResult *node);
+
 // deprecated for the to_string funciton remove soon.
 std::ostream &print_parse_result(std::ostream &os, const ParseResult &result, int indent = 0);
 std::ostream &operator<<(std::ostream &os, const ParseResult &result);
@@ -1187,16 +1199,21 @@ inline CharParserPtr source_file_namespace_body_parser =
     sequence(whitespace_between({literal("namespace"), variable(), nested_string_pair(source_file_body_parser)}),
              "source_file_namespace_body");
 
-inline CharParserPtr source_file_header_parser =
-    repeating(any_of({local_include_parser, system_include_parser}), "source_file_header");
+inline CharParserPtr local_or_system_includes_parser =
+    repeating(any_of({local_include_parser, system_include_parser}), "local_or_system_includes_parser");
 
 inline CharParserPtr source_file_parser = sequence(
-    {optional(source_file_header_parser), any_of({source_file_namespace_body_parser, source_file_body_parser})},
+    {optional(local_or_system_includes_parser), any_of({source_file_namespace_body_parser, source_file_body_parser})},
+    "source_file");
+
+inline CharParserPtr header_file_parser = sequence(
+    {optional(local_or_system_includes_parser), any_of({source_file_namespace_body_parser, source_file_body_parser})},
     "source_file");
 
 std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path);
+std::vector<std::string> extract_top_level_classes(const std::string &source_code_path);
 
 inline void test() {
     // test_parser("std::unordered_map<std::string, std::vector<std::string>>",

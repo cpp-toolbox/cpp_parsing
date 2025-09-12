@@ -21,6 +21,64 @@ ParseResult clean_parse_result(const ParseResult &r) {
     return cleaned;
 }
 
+// NOTE: next we have some operations on a parse result, I believe pointers are used here because outside the function
+// we initialize to nullopt making it operate like an optional, so I think optionals could be used instead here.
+
+// Find the first node in the tree whose parser_name equals `target` (DFS).
+const cpp_parsing::ParseResult *find_first_by_name(const cpp_parsing::ParseResult *root, const std::string &target) {
+    if (!root)
+        return nullptr;
+    if (root->parser_name == target)
+        return root;
+    for (const auto &c : root->sub_results) {
+        if (const cpp_parsing::ParseResult *r = find_first_by_name(&c, target))
+            return r;
+    }
+    return nullptr;
+}
+
+// Find any node whose parser_name contains substring `substr`. Example: "type_with_optional_reference".
+const cpp_parsing::ParseResult *find_first_name_contains(const cpp_parsing::ParseResult *root,
+                                                         const std::string &substr) {
+    if (!root)
+        return nullptr;
+    if (root->parser_name.find(substr) != std::string::npos)
+        return root;
+    for (const auto &c : root->sub_results) {
+        if (const cpp_parsing::ParseResult *r = find_first_name_contains(&c, substr))
+            return r;
+    }
+    return nullptr;
+}
+
+// Collect all nodes with parser_name == target (DFS)
+void collect_by_name(const cpp_parsing::ParseResult *root, const std::string &target,
+                     std::vector<const cpp_parsing::ParseResult *> &out) {
+    if (!root)
+        return;
+    if (root->parser_name == target)
+        out.push_back(root);
+    for (const auto &c : root->sub_results)
+        collect_by_name(&c, target, out);
+}
+
+// Join a node's match text, but try prefer more precise child matches when available.
+// Here we return trimmed 'match' for simplicity (you can refine to assemble tokens).
+std::string node_text(const cpp_parsing::ParseResult *node) {
+    if (!node)
+        return {};
+    if (!text_utils::trim(node->match).empty())
+        return text_utils::trim(node->match);
+    // fallback: try to concatenate children
+    std::string acc;
+    for (const auto &c : node->sub_results) {
+        if (!acc.empty())
+            acc += " ";
+        acc += text_utils::trim(c.match);
+    }
+    return text_utils::trim(acc);
+}
+
 std::ostream &print_parse_result(std::ostream &os, const ParseResult &result, int indent) {
     std::string indent_str(indent * 2, ' ');
     os << indent_str << "ParseResult {\n";
@@ -86,6 +144,28 @@ CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &na
     return std::make_shared<SequenceParser>(parsers, name);
 }
 
+std::string remove_macros(const std::string &code) {
+    std::istringstream iss(code);
+    std::ostringstream oss;
+    std::string line;
+
+    while (std::getline(iss, line)) {
+        // Trim leading spaces
+        std::string trimmed = line;
+        trimmed.erase(trimmed.begin(),
+                      std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char c) { return !std::isspace(c); }));
+
+        // Skip preprocessor lines
+        if (!trimmed.empty() && trimmed[0] == '#') {
+            continue;
+        }
+
+        oss << line << "\n";
+    }
+
+    return oss.str();
+}
+
 std::string remove_comments_from_file(const std::string &filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -146,25 +226,30 @@ get_parser_name_to_matches_for_source_file(const std::string &source_code_path) 
     // logger.disable_all_levels();
     try {
         std::string commentless_code = remove_comments_from_file(source_code_path);
+        // NOTE: I'm removing macros, because I am using the source file parser on header files as well
+        // and that is the only difference that I've encountered so far (which is clearly wrong), but works for now.
+        commentless_code = remove_macros(commentless_code);
         std::string flattened = text_utils::remove_newlines(commentless_code);
         flattened = text_utils::collapse_whitespace(flattened);
 
         ParseResult root = source_file_parser->parse(flattened, 0);
+        auto cleaned_root = clean_parse_result(root);
 
         auto match_map = collect_matches_by_parser_name(root);
         return match_map;
     } catch (const std::exception &e) {
-        std::cerr << "Error inget_parser_name_to_matches_for_source_file: " << e.what() << '\n';
+        std::cerr << "Error in get_parser_name_to_matches_for_source_file: " << e.what() << '\n';
         return {};
     }
 }
 
-std::vector<std::string> extract_top_level_functions(const std::string &source_code_path) {
+std::vector<std::string> extract_all_matches_for_a_particular_parser(const std::string &source_code_path,
+                                                                     const std::string &parser_name) {
     logger.disable_all_levels();
     try {
         auto match_map = get_parser_name_to_matches_for_source_file(source_code_path);
 
-        auto it = match_map.find(function_def_parser->name);
+        auto it = match_map.find(parser_name);
         if (it != match_map.end()) {
             return it->second;
         }
@@ -174,6 +259,15 @@ std::vector<std::string> extract_top_level_functions(const std::string &source_c
         std::cerr << "Error in extract_top_level_functions: " << e.what() << '\n';
         return {};
     }
+}
+
+// NOTE: having multiple of these seems expensive for no reason.
+std::vector<std::string> extract_top_level_functions(const std::string &source_code_path) {
+    return extract_all_matches_for_a_particular_parser(source_code_path, function_def_parser->name);
+}
+
+std::vector<std::string> extract_top_level_classes(const std::string &source_code_path) {
+    return extract_all_matches_for_a_particular_parser(source_code_path, class_def_parser->name);
 }
 
 CharParserPtr get_templated_type_parser() {
