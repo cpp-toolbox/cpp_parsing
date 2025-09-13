@@ -204,6 +204,38 @@ class CharParser {
 
 using CharParserPtr = std::shared_ptr<CharParser>;
 
+// helper to create parsers easier
+CharParserPtr optional_whitespace();
+CharParserPtr identifier();
+CharParserPtr variable();
+CharParserPtr base_type();
+CharParserPtr type_qualifier_sequence();
+CharParserPtr until_char(std::vector<char> target_chars, bool inclusive = true, bool ignore_in_strings_and_chars = true,
+                         const std::string &name = "");
+
+CharParserPtr literal(const std::string &s);
+
+inline std::vector<CharParserPtr> create_literal_parsers(std::vector<std::string> literals) {
+    std::vector<CharParserPtr> ls;
+    for (const auto &l : literals) {
+        auto lp = literal(l);
+        ls.push_back(lp);
+    }
+    return ls;
+}
+
+CharParserPtr matching_string_pair(const std::string &name = "matching_braces", std::string left = "{",
+                                   std::string right = "}");
+CharParserPtr nested_string_pair(CharParserPtr parser, const std::string &name = "nested_braces",
+                                 std::string left = "{", std::string right = "}");
+CharParserPtr repeating(CharParserPtr parser, const std::string &name = "repeating");
+CharParserPtr optional(CharParserPtr parser, const std::string &name = "optional");
+CharParserPtr deferred();
+CharParserPtr if_then(std::shared_ptr<CharParser> condition_parser, std::shared_ptr<CharParser> then_parser,
+                      const std::string &name = "if_then");
+CharParserPtr any_of(std::vector<CharParserPtr> parsers, const std::string &name = "any_of");
+CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "sequence");
+
 inline void log_start_of_parser(const std::string &name, const std::string &input, size_t start) {
     logger.debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
 }
@@ -282,15 +314,26 @@ class IfThenParser : public CharParser {
         LogSection ls(logger, "{} parser", name);
         log_start_of_parser(name, input, start);
 
-        auto first_result = condition->parse(input, start);
-        if (!first_result.succeeded) {
-            logger.debug("condition failed, stopping");
-            return first_result;
-        }
-        auto x = then_clause->parse(input, first_result.end);
+        size_t current = start;
+        std::vector<ParseResult> results;
 
-        logger.debug("ran then parser, returning its result");
-        return x;
+        // Always attempt the condition
+        auto first_result = condition->parse(input, current);
+        results.push_back(first_result);
+
+        if (!first_result.succeeded) {
+            // Return with just the condition result
+            return {false,  name, start, first_result.end, text_utils::get_substring(input, start, first_result.end),
+                    results};
+        }
+
+        // If condition succeeded, always attempt then_clause
+        current = first_result.end;
+        auto second_result = then_clause->parse(input, current);
+        results.push_back(second_result);
+
+        return {first_result.succeeded && second_result.succeeded,          name,   start, second_result.end,
+                text_utils::get_substring(input, start, second_result.end), results};
     }
 
   private:
@@ -830,6 +873,26 @@ class UntilCharParser : public CharParser {
     bool ignore_in_strings_and_chars_;
 };
 
+// NOTE: the next step was to create an enum parser, and then the ability to serialize that as well in the meta program.
+class CommaSeparatedTupleParser : public CharParser {
+  public:
+    CommaSeparatedTupleParser(CharParserPtr element_parser, std::string name = "comma_separated_tuple")
+        : CharParser(std::move(name)), element_parser(std::move(element_parser)) {}
+
+    ParseResult parse(const std::string &input, size_t start = 0) const override {
+        // Build the grammar dynamically:
+        // ( element ( "," element )* )?
+        auto comma_then_element = sequence({literal(","), element_parser}, "comma_then_element");
+        auto repeating_comma_elements = repeating(comma_then_element, "repeating_comma_elements");
+        auto full_sequence = optional(sequence({element_parser, repeating_comma_elements}, "tuple_core"), name);
+
+        return full_sequence->parse(input, start);
+    }
+
+  private:
+    CharParserPtr element_parser;
+};
+
 // a repeating parser attempts to repeatedly parse something until the parsing
 // fails using the passed in parser
 class RepeatingParser : public CharParser {
@@ -937,38 +1000,6 @@ class SequenceParser : public CharParser {
     std::vector<CharParserPtr> parsers_;
 };
 
-// helper to create parsers easier
-CharParserPtr optional_whitespace();
-CharParserPtr identifier();
-CharParserPtr variable();
-CharParserPtr base_type();
-CharParserPtr type_qualifier_sequence();
-CharParserPtr until_char(std::vector<char> target_chars, bool inclusive = true, bool ignore_in_strings_and_chars = true,
-                         const std::string &name = "");
-
-CharParserPtr literal(const std::string &s);
-
-inline std::vector<CharParserPtr> create_literal_parsers(std::vector<std::string> literals) {
-    std::vector<CharParserPtr> ls;
-    for (const auto &l : literals) {
-        auto lp = literal(l);
-        ls.push_back(lp);
-    }
-    return ls;
-}
-
-CharParserPtr matching_string_pair(const std::string &name = "matching_braces", std::string left = "{",
-                                   std::string right = "}");
-CharParserPtr nested_string_pair(CharParserPtr parser, const std::string &name = "nested_braces",
-                                 std::string left = "{", std::string right = "}");
-CharParserPtr repeating(CharParserPtr parser, const std::string &name = "repeating");
-CharParserPtr optional(CharParserPtr parser, const std::string &name = "optional");
-CharParserPtr deferred();
-CharParserPtr if_then(std::shared_ptr<CharParser> condition_parser, std::shared_ptr<CharParser> then_parser,
-                      const std::string &name = "if_then");
-CharParserPtr any_of(std::vector<CharParserPtr> parsers, const std::string &name = "any_of");
-CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "sequence");
-
 // === TESTING ===
 
 inline void test_parser(const std::string &input, const CharParserPtr &parser) {
@@ -1007,10 +1038,12 @@ inline CharParserPtr comma_separated_sequence_parser(CharParserPtr element_parse
                  "after_the_first_element_parser");
 
     // NOTE: we do optional here, because we allow the empty sequence to be valid
-    CharParserPtr optional_element_parser =
-        optional(if_then(sequence(whitespace_between({element_parser})), after_the_first_element_parser,
-                         "one_or_more_element_" + element_parser->name),
-                 "optional_elements");
+    CharParserPtr optional_element_parser = optional(
+        sequence({if_then(sequence(whitespace_between({element_parser})), after_the_first_element_parser,
+                          "one_or_more_element_" + element_parser->name),
+                  // NOTE: that this optional here is when we do something like 1, 2, 3, and that's valid in some cases
+                  optional(literal(","))}),
+        "optional_elements");
 
     return optional_element_parser;
 }
@@ -1160,7 +1193,7 @@ inline const std::vector<CharParserPtr> access_specifier_parsers = [] {
 inline const CharParserPtr access_specifier_parser = any_of(access_specifier_parsers, "access_specifier");
 
 inline const CharParserPtr class_inheritance_parser =
-    sequence(whitespace_between({literal(":"), access_specifier_parser, variable()}), "class_inheritance");
+    sequence(whitespace_between({literal(":"), optional(access_specifier_parser), variable()}), "class_inheritance");
 
 // NOTE: this is hollow
 inline CharParserPtr class_def_parser =
@@ -1177,6 +1210,11 @@ inline CharParserPtr class_def_parser_good = sequence(
                         literal(";")}),
     "class_def");
 
+inline CharParserPtr enum_class_def_parser =
+    sequence(whitespace_between({literal("enum class"), variable(), optional(class_inheritance_parser),
+                                 nested_string_pair(comma_separated_sequence_parser(variable())), literal(";")}),
+             "enum_class_def");
+
 inline CharParserPtr using_statement_parser = sequence(
     {
         literal("using"),
@@ -1191,8 +1229,9 @@ inline CharParserPtr struct_def_parser =
     sequence(whitespace_between({literal("struct"), variable(), matching_string_pair(), literal(";")}), "struct_def");
 
 inline CharParserPtr source_file_body_parser =
-    repeating(any_of({function_def_parser, constructor_def_parser, assignment_parser, class_def_parser,
-                      struct_def_parser, using_statement_parser}),
+    repeating(any_of({function_def_parser, constructor_def_parser, assignment_parser,
+                      // NOTE: are classes, strutcs, enums ever evne in the source file or headers only?
+                      class_def_parser, struct_def_parser, enum_class_def_parser, using_statement_parser}),
               "source_file_body");
 
 inline CharParserPtr source_file_namespace_body_parser =
@@ -1214,6 +1253,7 @@ std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_classes(const std::string &source_code_path);
+std::vector<std::string> extract_top_level_enum_classes(const std::string &source_code_path);
 
 inline void test() {
     // test_parser("std::unordered_map<std::string, std::vector<std::string>>",

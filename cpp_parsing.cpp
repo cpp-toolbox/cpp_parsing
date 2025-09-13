@@ -51,7 +51,7 @@ const cpp_parsing::ParseResult *find_first_name_contains(const cpp_parsing::Pars
     return nullptr;
 }
 
-// Collect all nodes with parser_name == target (DFS)
+// recursively collect all nodes with parser_name == target (DFS)
 void collect_by_name(const cpp_parsing::ParseResult *root, const std::string &target,
                      std::vector<const cpp_parsing::ParseResult *> &out) {
     if (!root)
@@ -268,6 +268,10 @@ std::vector<std::string> extract_top_level_functions(const std::string &source_c
 
 std::vector<std::string> extract_top_level_classes(const std::string &source_code_path) {
     return extract_all_matches_for_a_particular_parser(source_code_path, class_def_parser->name);
+}
+
+std::vector<std::string> extract_top_level_enum_classes(const std::string &source_code_path) {
+    return extract_all_matches_for_a_particular_parser(source_code_path, enum_class_def_parser->name);
 }
 
 CharParserPtr get_templated_type_parser() {
