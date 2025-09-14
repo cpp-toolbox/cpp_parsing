@@ -185,6 +185,11 @@ const cpp_parsing::ParseResult *find_first_name_contains(const cpp_parsing::Pars
 void collect_by_name(const cpp_parsing::ParseResult *root, const std::string &target,
                      std::vector<const cpp_parsing::ParseResult *> &out);
 
+ParseResult parse_source_or_header_file(const std::string &source_code_path);
+
+std::vector<std::pair<std::string, std::string>> bfs_collect_matches(const cpp_parsing::ParseResult *root,
+                                                                     const std::vector<std::string> &names);
+
 std::string node_text(const cpp_parsing::ParseResult *node);
 
 // deprecated for the to_string funciton remove soon.
@@ -1204,6 +1209,14 @@ inline CharParserPtr class_def_parser =
 // NOTE: doesn't yet support nested classes.
 inline CharParserPtr class_def_parser_good = sequence(
     whitespace_between({literal("class"), variable(), optional(class_inheritance_parser),
+                        nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
+                                                             sequence(whitespace_between({literal("private:")})),
+                                                             assignment_parser, declaration_parser}))),
+                        literal(";")}),
+    "class_def");
+
+inline CharParserPtr struct_def_parser_good = sequence(
+    whitespace_between({literal("struct"), variable(), optional(class_inheritance_parser),
                         nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
                                                              sequence(whitespace_between({literal("private:")})),
                                                              assignment_parser, declaration_parser}))),

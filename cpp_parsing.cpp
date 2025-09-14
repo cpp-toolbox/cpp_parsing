@@ -1,4 +1,5 @@
 #include "cpp_parsing.hpp"
+#include <queue>
 
 namespace cpp_parsing {
 
@@ -60,6 +61,33 @@ void collect_by_name(const cpp_parsing::ParseResult *root, const std::string &ta
         out.push_back(root);
     for (const auto &c : root->sub_results)
         collect_by_name(&c, target, out);
+}
+
+std::vector<std::pair<std::string, std::string>> bfs_collect_matches(const cpp_parsing::ParseResult *root,
+                                                                     const std::vector<std::string> &names) {
+    std::vector<std::pair<std::string, std::string>> results;
+    if (!root)
+        return results;
+
+    std::unordered_set<std::string> name_set(names.begin(), names.end());
+
+    std::queue<const cpp_parsing::ParseResult *> q;
+    q.push(root);
+
+    while (!q.empty()) {
+        const cpp_parsing::ParseResult *cur = q.front();
+        q.pop();
+
+        if (name_set.count(cur->parser_name)) {
+            results.emplace_back(cur->parser_name, node_text(cur));
+        }
+
+        for (const auto &c : cur->sub_results) {
+            q.push(&c);
+        }
+    }
+
+    return results;
 }
 
 // Join a node's match text, but try prefer more precise child matches when available.
@@ -219,6 +247,20 @@ collect_matches_by_parser_name(const ParseResult &result, const std::vector<std:
 
     recurse(result);
     return matches;
+}
+
+ParseResult parse_source_or_header_file(const std::string &source_code_path) {
+    std::string commentless_code = remove_comments_from_file(source_code_path);
+    // NOTE: I'm removing macros, because I am using the source file parser on header files as well
+    // and that is the only difference that I've encountered so far (which is clearly wrong), but works for now.
+    commentless_code = remove_macros(commentless_code);
+    std::string flattened = text_utils::remove_newlines(commentless_code);
+    flattened = text_utils::collapse_whitespace(flattened);
+
+    ParseResult root = source_file_parser->parse(flattened, 0);
+    auto cleaned_root = clean_parse_result(root);
+
+    return cleaned_root;
 }
 
 std::unordered_map<std::string, std::vector<std::string>>
