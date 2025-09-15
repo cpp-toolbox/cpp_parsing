@@ -145,6 +145,10 @@ CharParserPtr literal(const std::string &s) { return std::make_shared<LiteralPar
 CharParserPtr matching_string_pair(const std::string &name, std::string left, std::string right) {
     return std::make_shared<MatchingStringPairParser>(name, left, right);
 }
+
+CharParserPtr matching_pair(CharParserPtr left_parser, CharParserPtr right_parser, const std::string &name) {
+    return std::make_shared<MatchingPairParser>(left_parser, right_parser, name);
+}
 CharParserPtr nested_string_pair(CharParserPtr parser, const std::string &name, std::string left, std::string right) {
     return std::make_shared<NestedStringPairParser>(parser, name, left, right);
 }
@@ -319,18 +323,30 @@ std::vector<std::string> extract_top_level_enum_classes(const std::string &sourc
 CharParserPtr get_templated_type_parser() {
     auto templated_type_recursive_placeholder = std::make_shared<DeferredParser>();
 
-    CharParserPtr templated_type_parameter_list = sequence(
-        {templated_type_recursive_placeholder,
-         optional(repeating(sequence(whitespace_between({literal(","), templated_type_recursive_placeholder}))))},
-        "templated_type_parameter_list");
+    CharParserPtr integer_literal_parser = std::make_shared<DecimalLiteralParser>();
+    // TODO: expand later for full constant-expression support
+
+    CharParserPtr template_argument = any_of(
+        {
+            templated_type_recursive_placeholder, // type argument (recursive)
+            integer_literal_parser                // constant argument
+        },
+        "template_argument");
+
+    CharParserPtr template_argument_list = sequence(
+        {template_argument, optional(repeating(sequence(whitespace_between({literal(","), template_argument}))))},
+        "template_argument_list");
 
     full_non_recursive_type->name = "non_templated_type";
 
-    CharParserPtr templated_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
-        {optionally_namespaced_identifier(), literal("<"), templated_type_parameter_list, literal(">")})));
+    // templated type: e.g. std::vector<int>, std::array<float, 3>
+    CharParserPtr templated_type_parser = add_optional_type_surroundings(sequence(
+        whitespace_between({optionally_namespaced_identifier(), literal("<"), template_argument_list, literal(">")})));
 
+    // TODO: using a template argument list here is wrong, it should be a comme seqpearated sequence of
+    // templated_type_recursive_placeholder instead
     CharParserPtr lambda_function_signature_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
-        {templated_type_recursive_placeholder, literal("("), templated_type_parameter_list, literal(")")})));
+        {templated_type_recursive_placeholder, literal("("), template_argument_list, literal(")")})));
     lambda_function_signature_type_parser->name = "lambda_function_signature_type_parser";
 
     CharParserPtr lambda_function_type_parser = add_optional_type_surroundings(sequence(whitespace_between(
@@ -338,8 +354,7 @@ CharParserPtr get_templated_type_parser() {
     lambda_function_type_parser->name = "lambda_function_type_parser";
 
     CharParserPtr templated_type =
-        any_of({templated_type_parser, lambda_function_type_parser, full_non_recursive_type}, // base case
-               "templated_type");
+        any_of({templated_type_parser, lambda_function_type_parser, full_non_recursive_type}, "templated_type");
 
     // NOTE: define its inner content after the fact to avoid circular dependencies
     templated_type_recursive_placeholder->set_parser(templated_type);

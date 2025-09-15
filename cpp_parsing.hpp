@@ -245,6 +245,26 @@ inline void log_start_of_parser(const std::string &name, const std::string &inpu
     logger.debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
 }
 
+class DecimalLiteralParser : public CharParser {
+  public:
+    explicit DecimalLiteralParser(std::string name = "decimal_literal") : CharParser(std::move(name)) {}
+
+    ParseResult parse(const std::string &input, size_t start = 0) const override {
+        size_t i = start;
+        while (i < input.size() && std::isdigit(static_cast<unsigned char>(input[i]))) {
+            ++i;
+        }
+
+        if (i == start) {
+            // No digits consumed → fail
+            return ParseResult(false, name, start, start, "");
+        }
+
+        std::string matched = input.substr(start, i - start);
+        return ParseResult(true, name, start, i, matched);
+    }
+};
+
 class IdentifierParser : public CharParser {
   public:
     IdentifierParser() : CharParser("identifier") {}
@@ -730,6 +750,111 @@ class MatchingStringPairParser : public CharParser {
     static bool starts_with(const std::string &s, size_t pos, const std::string &prefix) {
         return s.compare(pos, prefix.size(), prefix) == 0;
     }
+};
+
+// NOTE: untested, but leaving it here for later because it's a good idea I might need in the future.
+class MatchingPairParser : public CharParser {
+  public:
+    MatchingPairParser(CharParserPtr left_parser, CharParserPtr right_parser, const std::string &name = "matching_pair")
+        : CharParser(name), left_parser_(std::move(left_parser)), right_parser_(std::move(right_parser)) {}
+
+    ParseResult parse(const std::string &input, size_t start) const override {
+        LogSection ls(logger, "{} parser", name);
+        log_start_of_parser(name, input, start);
+
+        // Parse the left delimiter
+        auto left_result = left_parser_->parse(input, start);
+        if (!left_result.succeeded) {
+            logger.debug("  Left delimiter parse failed");
+            return {false, name, start, start, ""};
+        }
+
+        size_t depth = 1;
+        bool in_string = false;
+        bool in_char = false;
+        bool escape_next = false;
+        size_t i = left_result.end;
+
+        while (i < input.size()) {
+            char c = input[i];
+
+            if (escape_next) {
+                escape_next = false;
+                ++i;
+                continue;
+            }
+
+            if (in_string) {
+                if (c == '\\') {
+                    escape_next = true;
+                } else if (c == '"') {
+                    in_string = false;
+                }
+                ++i;
+                continue;
+            }
+
+            if (in_char) {
+                if (c == '\\') {
+                    escape_next = true;
+                } else if (c == '\'') {
+                    in_char = false;
+                }
+                ++i;
+                continue;
+            }
+
+            if (c == '"') {
+                in_string = true;
+                ++i;
+                continue;
+            }
+
+            if (c == '\'') {
+                in_char = true;
+                ++i;
+                continue;
+            }
+
+            // Try parsing another left delimiter
+            {
+                auto inner_left = left_parser_->parse(input, i);
+                if (inner_left.succeeded) {
+                    ++depth;
+                    i = inner_left.end;
+                    continue;
+                }
+            }
+
+            // Try parsing a right delimiter
+            {
+                auto inner_right = right_parser_->parse(input, i);
+                if (inner_right.succeeded) {
+                    --depth;
+                    i = inner_right.end;
+                    if (depth == 0) {
+                        logger.debug("  Found matching closing delimiter at {}", i);
+                        return {true,
+                                name,
+                                start,
+                                i,
+                                text_utils::get_substring(input, start, i),
+                                {left_result, inner_right}};
+                    }
+                    continue;
+                }
+            }
+
+            ++i;
+        }
+
+        logger.debug("  Matching closing delimiter not found");
+        return {false, name, start, input.size(), text_utils::get_substring(input, start, input.size())};
+    }
+
+  private:
+    CharParserPtr left_parser_;
+    CharParserPtr right_parser_;
 };
 
 class NestedStringPairParser : public CharParser {
