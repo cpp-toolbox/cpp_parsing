@@ -1346,7 +1346,7 @@ inline CharParserPtr struct_def_parser_good = sequence(
                                                              sequence(whitespace_between({literal("private:")})),
                                                              assignment_parser, declaration_parser}))),
                         literal(";")}),
-    "class_def");
+    "struct_def");
 
 inline CharParserPtr enum_class_def_parser =
     sequence(whitespace_between({literal("enum class"), variable(), optional(class_inheritance_parser),
