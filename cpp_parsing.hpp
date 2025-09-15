@@ -239,11 +239,31 @@ CharParserPtr deferred();
 CharParserPtr if_then(std::shared_ptr<CharParser> condition_parser, std::shared_ptr<CharParser> then_parser,
                       const std::string &name = "if_then");
 CharParserPtr any_of(std::vector<CharParserPtr> parsers, const std::string &name = "any_of");
+CharParserPtr not_any_of(std::shared_ptr<CharParser> inner, std::unordered_set<std::string> forbidden,
+                         std::string name = "not_any_of");
+
 CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "sequence");
 
 inline void log_start_of_parser(const std::string &name, const std::string &input, size_t start) {
     logger.debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
 }
+
+class TransformParser : public CharParser {
+  public:
+    using TransformFn = std::function<ParseResult(const ParseResult &)>;
+
+    TransformParser(std::shared_ptr<CharParser> inner, TransformFn fn, std::string name = "")
+        : CharParser(std::move(name)), inner(std::move(inner)), fn(std::move(fn)) {}
+
+    ParseResult parse(const std::string &input, size_t start = 0) const override {
+        auto result = inner->parse(input, start);
+        return fn(result);
+    }
+
+  private:
+    std::shared_ptr<CharParser> inner;
+    TransformFn fn;
+};
 
 class DecimalLiteralParser : public CharParser {
   public:
@@ -1246,7 +1266,7 @@ inline CharParserPtr full_non_recursive_type = add_optional_type_surroundings(op
 // NOTE: the order in which this is parsed matters a lot, because given something like std::function<void(int)>, if we
 // run the non recurisve type on this we'd find up to std::function, instead we want most specific to least specific I
 // thinki
-inline CharParserPtr type = add_optional_type_surroundings(get_templated_type_parser());
+inline CharParserPtr type = not_any_of(add_optional_type_surroundings(get_templated_type_parser()), cpp_keywords);
 
 inline CharParserPtr assignment_parser =
     sequence(whitespace_between({type, variable(), literal("="), until_char({';'})}), "assignment");
@@ -1353,15 +1373,14 @@ inline CharParserPtr enum_class_def_parser =
                                  nested_string_pair(comma_separated_sequence_parser(variable())), literal(";")}),
              "enum_class_def");
 
-inline CharParserPtr using_statement_parser = sequence(
-    {
-        literal("using"),
-        variable(),
-        literal("="),
-        base_type(),
-        literal(";"),
-    },
-    "using_statement");
+inline CharParserPtr using_statement_parser = sequence(whitespace_between({
+                                                           literal("using"),
+                                                           variable(),
+                                                           literal("="),
+                                                           type,
+                                                           literal(";"),
+                                                       }),
+                                                       "using_statement");
 
 inline CharParserPtr struct_def_parser =
     sequence(whitespace_between({literal("struct"), variable(), matching_string_pair(), literal(";")}), "struct_def");

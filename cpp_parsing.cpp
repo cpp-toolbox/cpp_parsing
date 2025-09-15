@@ -176,6 +176,22 @@ CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &na
     return std::make_shared<SequenceParser>(parsers, name);
 }
 
+CharParserPtr not_any_of(std::shared_ptr<CharParser> inner, std::unordered_set<std::string> forbidden,
+                         std::string name) {
+    return std::make_shared<TransformParser>(
+        std::move(inner),
+        [forbidden = std::move(forbidden)](const ParseResult &r) -> ParseResult {
+            if (!r.succeeded) {
+                return r; // pass failure through
+            }
+            if (forbidden.count(text_utils::trim(r.match))) {
+                return ParseResult(false, r.parser_name, r.start, r.end, r.match, r.sub_results);
+            }
+            return r;
+        },
+        std::move(name));
+}
+
 std::string remove_macros(const std::string &code) {
     std::istringstream iss(code);
     std::ostringstream oss;
