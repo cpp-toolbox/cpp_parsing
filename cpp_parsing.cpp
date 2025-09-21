@@ -297,6 +297,9 @@ get_parser_name_to_matches_for_source_file(const std::string &source_code_path) 
         ParseResult root = source_file_parser->parse(flattened, 0);
         auto cleaned_root = clean_parse_result(root);
 
+        std::cout << "goob" << std::endl;
+        std::cout << cleaned_root.to_string() << std::endl;
+
         auto match_map = collect_matches_by_parser_name(root);
         return match_map;
     } catch (const std::exception &e) {
@@ -326,6 +329,10 @@ std::vector<std::string> extract_all_matches_for_a_particular_parser(const std::
 // NOTE: having multiple of these seems expensive for no reason.
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path) {
     return extract_all_matches_for_a_particular_parser(source_code_path, function_def_parser->name);
+}
+
+std::vector<std::string> extract_top_level_function_declarations(const std::string &header_code_path) {
+    return extract_all_matches_for_a_particular_parser(header_code_path, function_decl_parser->name);
 }
 
 std::vector<std::string> extract_top_level_classes(const std::string &source_code_path) {

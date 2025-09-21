@@ -1331,6 +1331,9 @@ inline CharParserPtr function_signature_parser =
 inline CharParserPtr function_def_parser =
     sequence(whitespace_between({function_signature_parser, matching_string_pair()}), "function_def");
 
+inline CharParserPtr function_decl_parser =
+    sequence(whitespace_between({function_signature_parser, literal(";")}), "function_decl");
+
 inline const std::vector<CharParserPtr> access_specifier_parsers = [] {
     std::vector<CharParserPtr> result;
     result.reserve(access_specifiers.size());
@@ -1385,11 +1388,11 @@ inline CharParserPtr using_statement_parser = sequence(whitespace_between({
 inline CharParserPtr struct_def_parser =
     sequence(whitespace_between({literal("struct"), variable(), matching_string_pair(), literal(";")}), "struct_def");
 
-inline CharParserPtr source_file_body_parser =
-    repeating(any_of({function_def_parser, constructor_def_parser, assignment_parser,
-                      // NOTE: are classes, strutcs, enums ever evne in the source file or headers only?
-                      class_def_parser, struct_def_parser, enum_class_def_parser, using_statement_parser}),
-              "source_file_body");
+inline CharParserPtr source_file_body_parser = repeating(
+    any_of({function_def_parser, constructor_def_parser, assignment_parser,
+            // NOTE: are classes, strutcs, enums ever evne in the source file or headers only?
+            class_def_parser, struct_def_parser, enum_class_def_parser, using_statement_parser, function_decl_parser}),
+    "source_file_body");
 
 inline CharParserPtr source_file_namespace_body_parser =
     sequence(whitespace_between({literal("namespace"), variable(), nested_string_pair(source_file_body_parser)}),
@@ -1409,6 +1412,7 @@ inline CharParserPtr header_file_parser = sequence(
 std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_functions(const std::string &source_code_path);
+std::vector<std::string> extract_top_level_function_declarations(const std::string &header_code_path);
 std::vector<std::string> extract_top_level_classes(const std::string &source_code_path);
 std::vector<std::string> extract_top_level_enum_classes(const std::string &source_code_path);
 
