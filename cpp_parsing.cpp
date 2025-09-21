@@ -285,7 +285,7 @@ ParseResult parse_source_or_header_file(const std::string &source_code_path) {
 
 std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path) {
-    // logger.disable_all_levels();
+    logger.disable_all_levels();
     try {
         std::string commentless_code = remove_comments_from_file(source_code_path);
         // NOTE: I'm removing macros, because I am using the source file parser on header files as well
@@ -296,9 +296,6 @@ get_parser_name_to_matches_for_source_file(const std::string &source_code_path) 
 
         ParseResult root = source_file_parser->parse(flattened, 0);
         auto cleaned_root = clean_parse_result(root);
-
-        std::cout << "goob" << std::endl;
-        std::cout << cleaned_root.to_string() << std::endl;
 
         auto match_map = collect_matches_by_parser_name(root);
         return match_map;
