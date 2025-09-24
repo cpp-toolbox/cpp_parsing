@@ -1233,7 +1233,7 @@ inline CharParserPtr default_value_for_parameter_suffix_parser =
 //
 
 inline CharParserPtr optionally_namespaced_identifier() {
-    return sequence({optional(sequence({identifier(), literal("::")})), identifier()});
+    return sequence({optional(repeating(sequence({identifier(), literal("::")}))), identifier()});
 }
 
 inline CharParserPtr optional_reference_or_pointer() { return optional(any_of(create_literal_parsers({"*", "&"}))); };
