@@ -1272,6 +1272,8 @@ inline CharParserPtr type = not_any_of(add_optional_type_surroundings(get_templa
 inline CharParserPtr assignment_parser =
     sequence(whitespace_between({type, variable(), literal("="), until_char({';'})}), "assignment");
 
+// NOTE: here is another example of what I'm talking about above, a function can be interpreted as a declaration because
+// it follows the same type var ... ; format so this is less specific so we have to match a function declaration first
 inline CharParserPtr declaration_parser =
     sequence(whitespace_between({type, variable(), until_char({';'})}), "declaration");
 
@@ -1357,19 +1359,21 @@ inline CharParserPtr class_def_parser =
 
 // NOTE: doesn't yet support nested classes.
 inline CharParserPtr class_def_parser_good = sequence(
-    whitespace_between({literal("class"), variable(), optional(class_inheritance_parser),
-                        nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
-                                                             sequence(whitespace_between({literal("private:")})),
-                                                             assignment_parser, declaration_parser}))),
-                        literal(";")}),
+    whitespace_between(
+        {literal("class"), variable(), optional(class_inheritance_parser),
+         nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
+                                              sequence(whitespace_between({literal("private:")})), function_def_parser,
+                                              function_decl_parser, assignment_parser, declaration_parser}))),
+         literal(";")}),
     "class_def");
 
 inline CharParserPtr struct_def_parser_good = sequence(
-    whitespace_between({literal("struct"), variable(), optional(class_inheritance_parser),
-                        nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
-                                                             sequence(whitespace_between({literal("private:")})),
-                                                             assignment_parser, declaration_parser}))),
-                        literal(";")}),
+    whitespace_between(
+        {literal("struct"), variable(), optional(class_inheritance_parser),
+         nested_string_pair(repeating(any_of({sequence(whitespace_between({literal("public:")})),
+                                              sequence(whitespace_between({literal("private:")})), function_def_parser,
+                                              function_decl_parser, assignment_parser, declaration_parser}))),
+         literal(";")}),
     "struct_def");
 
 inline CharParserPtr enum_class_def_parser =
