@@ -270,7 +270,6 @@ collect_matches_by_parser_name(const ParseResult &result, const std::vector<std:
 }
 
 ParseResult parse_source_or_header_file(const std::string &source_code_path) {
-    logger.disable_all_levels();
     std::string commentless_code = remove_comments_from_file(source_code_path);
     // NOTE: I'm removing macros, because I am using the source file parser on header files as well
     // and that is the only difference that I've encountered so far (which is clearly wrong), but works for now.
@@ -286,7 +285,6 @@ ParseResult parse_source_or_header_file(const std::string &source_code_path) {
 
 std::unordered_map<std::string, std::vector<std::string>>
 get_parser_name_to_matches_for_source_file(const std::string &source_code_path) {
-    logger.disable_all_levels();
     try {
         std::string commentless_code = remove_comments_from_file(source_code_path);
         // NOTE: I'm removing macros, because I am using the source file parser on header files as well
@@ -308,7 +306,6 @@ get_parser_name_to_matches_for_source_file(const std::string &source_code_path) 
 
 std::vector<std::string> extract_all_matches_for_a_particular_parser(const std::string &source_code_path,
                                                                      const std::string &parser_name) {
-    logger.disable_all_levels();
     try {
         auto match_map = get_parser_name_to_matches_for_source_file(source_code_path);
 
