@@ -245,7 +245,7 @@ CharParserPtr not_any_of(std::shared_ptr<CharParser> inner, std::unordered_set<s
 CharParserPtr sequence(std::vector<CharParserPtr> parsers, const std::string &name = "sequence");
 
 inline void log_start_of_parser(const std::string &name, const std::string &input, size_t start) {
-    global_logger.debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
+    global_logger->debug("at position {}, rest of text: {}", start, get_next_part_of_string(input, start));
 }
 
 class TransformParser : public CharParser {
@@ -290,21 +290,21 @@ class IdentifierParser : public CharParser {
     IdentifierParser() : CharParser("identifier") {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         size_t pos = start;
         const size_t len = input.size();
 
         if (pos >= len) {
-            global_logger.debug("{} parser failed: start position {} beyond input length {}", name, start, len);
+            global_logger->debug("{} parser failed: start position {} beyond input length {}", name, start, len);
             return {false, name, start, start, "", {}};
         }
 
         char c = input[pos];
         if (!isIdentifierStartChar(c)) {
-            global_logger.debug("{} parser failed: first char '{}' at position {} is not valid start char", name, c,
-                                pos);
+            global_logger->debug("{} parser failed: first char '{}' at position {} is not valid start char", name, c,
+                                 pos);
             return {false, name, start, start, "", {}};
         }
 
@@ -314,7 +314,7 @@ class IdentifierParser : public CharParser {
         }
 
         std::string matched = input.substr(start, pos - start);
-        global_logger.debug("{} parser succeeded: matched '{}' from {} to {}", name, matched, start, pos);
+        global_logger->debug("{} parser succeeded: matched '{}' from {} to {}", name, matched, start, pos);
 
         return {true, name, start, pos, std::move(matched), {}};
     }
@@ -330,18 +330,18 @@ class OptionalParser : public CharParser {
         : CharParser(name), inner_parser(std::move(inner)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         auto result = inner_parser->parse(input, start);
-        global_logger.debug("{} got out", name);
+        global_logger->debug("{} got out", name);
 
         if (result.succeeded) {
-            global_logger.debug("{} parser: inner parser succeeded, returning {}", name, result.to_string());
+            global_logger->debug("{} parser: inner parser succeeded, returning {}", name, result.to_string());
             return result;
         } else {
             ParseResult result(true, name, start, start, "");
-            global_logger.debug("OptionalParser: inner parser failed, returning original position ");
+            global_logger->debug("OptionalParser: inner parser failed, returning original position ");
             return result;
         }
     }
@@ -357,7 +357,7 @@ class IfThenParser : public CharParser {
         : CharParser(name), condition(std::move(condition_parser)), then_clause(std::move(then_parser)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         size_t current = start;
@@ -401,7 +401,7 @@ class DeferredParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         if (!actual_parser) {
@@ -416,17 +416,17 @@ class OptionalWhitespaceParser : public CharParser {
     OptionalWhitespaceParser() : CharParser("optional_whitespace") {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         size_t i = start;
         while (i < input.size()) {
             char c = input[i];
             if (std::isspace(static_cast<unsigned char>(c))) {
-                global_logger.debug("  Whitespace at position {}", i);
+                global_logger->debug("  Whitespace at position {}", i);
                 ++i;
             } else {
-                global_logger.debug("  Non-whitespace at position {} we got {} instead, stopping", i, c);
+                global_logger->debug("  Non-whitespace at position {} we got {} instead, stopping", i, c);
                 break;
             }
         }
@@ -443,17 +443,17 @@ class VariableParser : public CharParser {
     ParseResult parse(const std::string &input, size_t start) const override {
         size_t i = start;
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         if (i >= input.size()) {
-            global_logger.debug("  Empty input or out of bounds");
+            global_logger->debug("  Empty input or out of bounds");
             return {false, name, i, i, ""};
         }
 
         char first_char = input[i];
         if (!(std::isalpha(first_char) || first_char == '_')) {
-            global_logger.debug("  First character '{}' is not a valid start of variable", first_char);
+            global_logger->debug("  First character '{}' is not a valid start of variable", first_char);
             return {false, name, i, i, ""};
         }
 
@@ -468,11 +468,11 @@ class VariableParser : public CharParser {
         }
 
         std::string var_name = input.substr(start, i - start);
-        global_logger.debug("  Parsed variable name: '{}'", var_name);
+        global_logger->debug("  Parsed variable name: '{}'", var_name);
 
         bool is_cpp_keyword = cpp_keywords.count(var_name) > 0 or cpp_built_in_types.count(var_name) > 0;
         if (is_cpp_keyword) {
-            global_logger.debug("  Rejected: '{}' is a C++ keyword", var_name);
+            global_logger->debug("  Rejected: '{}' is a C++ keyword", var_name);
             return {false, name, i, i, ""};
         }
 
@@ -493,39 +493,39 @@ class TypeParser : public CharParser {
     ParseResult parse_type_internal(const std::string &input, size_t start, int depth) const {
         size_t i = start;
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         while (i < input.size()) {
             char c = input[i];
-            global_logger.debug("  At position {}, char = '{}'", i, c);
+            global_logger->debug("  At position {}, char = '{}'", i, c);
 
             if (is_valid_char(c)) {
-                global_logger.debug("    Valid char, continue");
+                global_logger->debug("    Valid char, continue");
                 ++i;
             } else if (c == '<') {
-                global_logger.debug("    Found '<', parsing type argument list...");
+                global_logger->debug("    Found '<', parsing type argument list...");
                 ++i; // consume '<'
 
                 while (i < input.size()) {
                     // Parse a type argument recursively
                     auto inner_result = parse_type_internal(input, i, depth + 1);
                     if (!inner_result.succeeded) {
-                        global_logger.debug("    Failed to parse inner type at position {}", i);
+                        global_logger->debug("    Failed to parse inner type at position {}", i);
                         return {false, name, i, i, ""};
                     }
 
                     i = inner_result.end;
-                    global_logger.debug("    Parsed type argument up to position ", i);
+                    global_logger->debug("    Parsed type argument up to position ", i);
 
                     if (i >= input.size()) {
-                        global_logger.debug("    Unexpected end of input after type argument");
+                        global_logger->debug("    Unexpected end of input after type argument");
                         return {false, name, i, i, ""};
                     }
 
                     if (input[i] == ',') {
                         if (input[i] == ',') {
-                            global_logger.debug("    Found ',', continuing to next type argument");
+                            global_logger->debug("    Found ',', continuing to next type argument");
                             ++i; // consume ','
 
                             // Skip whitespace after comma
@@ -536,7 +536,7 @@ class TypeParser : public CharParser {
                             continue;
                         }
                     } else if (input[i] == '>') {
-                        global_logger.debug("    Found matching '>' at position {}", i);
+                        global_logger->debug("    Found matching '>' at position {}", i);
                         ++i; // consume '>'
                         if (depth == 0) {
                             return {true, name, start, i, text_utils::get_substring(input, start, i)};
@@ -544,46 +544,46 @@ class TypeParser : public CharParser {
                             return {true, name, start, i, text_utils::get_substring(input, start, i)};
                         }
                     } else {
-                        global_logger.debug("    Unexpected character '{}' while parsing type "
-                                            "argument list ",
-                                            input[i]);
+                        global_logger->debug("    Unexpected character '{}' while parsing type "
+                                             "argument list ",
+                                             input[i]);
                         return {false, name, i, i, ""};
                     }
                 }
 
-                global_logger.debug("    Reached end of input while parsing type arguments");
+                global_logger->debug("    Reached end of input while parsing type arguments");
                 return {false, name, i, i, ""};
             } else if (c == '>') {
                 if (depth == 0) {
-                    global_logger.debug("    Found '>' at depth 0, stopping parse here at position {}", i);
+                    global_logger->debug("    Found '>' at depth 0, stopping parse here at position {}", i);
                     return {true, name, start, i, text_utils::get_substring(input, start, i)};
                 } else {
-                    global_logger.debug("    Found '>' at depth {} ", depth);
+                    global_logger->debug("    Found '>' at depth {} ", depth);
                     return {true, name, start, i, text_utils::get_substring(input, start, i)};
                 }
             } else if (c == ',') {
                 if (depth == 0) {
-                    global_logger.debug("    Found ',' at depth 0, treating as end of type");
+                    global_logger->debug("    Found ',' at depth 0, treating as end of type");
                     break;
                 } else {
-                    global_logger.debug("    Found ',' at depth {}, returning to caller", depth);
+                    global_logger->debug("    Found ',' at depth {}, returning to caller", depth);
                     break;
                 }
             } else {
-                global_logger.debug("    Invalid character, breaking");
+                global_logger->debug("    Invalid character, breaking");
                 break;
             }
         }
 
         std::string type = input.substr(start, i - start);
-        global_logger.debug("  Parsed type: '{}'", type);
+        global_logger->debug("  Parsed type: '{}'", type);
 
         if (cpp_keywords.count(type)) {
-            global_logger.debug("  Rejected: '{}' is a c++ keyword", type);
+            global_logger->debug("  Rejected: '{}' is a c++ keyword", type);
             return {false, name, start, start, ""};
         }
 
-        global_logger.debug("Exiting parse_type at position {} with depth {}", i, depth);
+        global_logger->debug("Exiting parse_type at position {} with depth {}", i, depth);
         return {true, name, start, i, text_utils::get_substring(input, start, i)};
     }
 };
@@ -596,7 +596,7 @@ class TypeQualifierSequenceParser : public CharParser {
                                                                    "mutable",   "register",  "inline",   "thread_local",
                                                                    "constexpr", "consteval", "constinit"};
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         size_t i = start;
@@ -619,12 +619,12 @@ class TypeQualifierSequenceParser : public CharParser {
             if (word.empty())
                 break;
 
-            global_logger.debug("  Found word: {}", word);
+            global_logger->debug("  Found word: {}", word);
 
             if (qualifiers.count(word)) {
                 found_qualifiers.push_back(word);
             } else {
-                global_logger.debug("  Word: {} is not a qualifier. Stopping", word);
+                global_logger->debug("  Word: {} is not a qualifier. Stopping", word);
                 // Reset `i` back to start of this non-qualifier word
                 i = word_start;
                 break;
@@ -632,13 +632,13 @@ class TypeQualifierSequenceParser : public CharParser {
         }
 
         if (!found_qualifiers.empty()) {
-            global_logger.debug("  Parsed qualifiers:");
+            global_logger->debug("  Parsed qualifiers:");
             for (const auto &q : found_qualifiers)
-                global_logger.debug(" {}", q);
+                global_logger->debug(" {}", q);
             return {true, name, start, i, text_utils::get_substring(input, start, i)};
         }
 
-        global_logger.debug("  No qualifiers found");
+        global_logger->debug("  No qualifiers found");
         return {false, name, i, i, ""};
     }
 };
@@ -649,27 +649,27 @@ class LiteralParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         if (start + literal_.size() > input.size()) {
 
-            global_logger.debug("  Not enough input left to match. Needed: {}, available: {}", literal_.size(),
-                                (input.size() - start));
+            global_logger->debug("  Not enough input left to match. Needed: {}, available: {}", literal_.size(),
+                                 (input.size() - start));
 
             return {false, name, start, start, ""};
         }
 
         std::string_view slice = std::string_view(input).substr(start, literal_.size());
 
-        global_logger.debug(" Comparing {} to {}", slice, literal_);
+        global_logger->debug(" Comparing {} to {}", slice, literal_);
 
         if (slice == literal_) {
-            global_logger.debug("  Match succeeded. Advancing to position {}", start + literal_.size());
+            global_logger->debug("  Match succeeded. Advancing to position {}", start + literal_.size());
             auto end = start + literal_.size();
             return {true, name, start, end, text_utils::get_substring(input, start, end)};
         } else {
-            global_logger.debug("  Match failed.");
+            global_logger->debug("  Match failed.");
             return {false, name, start, start, ""};
         }
     }
@@ -688,11 +688,11 @@ class MatchingStringPairParser : public CharParser {
     std::string right_str;
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         if (start >= input.size() || !starts_with(input, start, left_str)) {
-            global_logger.debug("  Start sequence is not '{}', aborting", left_str);
+            global_logger->debug("  Start sequence is not '{}', aborting", left_str);
             return {false, name, start, start, ""};
         }
 
@@ -754,7 +754,7 @@ class MatchingStringPairParser : public CharParser {
                 i += right_str.size();
                 if (depth == 0) {
                     size_t end = i;
-                    global_logger.debug("  Found matching closing sequence at position {}", end - right_str.size());
+                    global_logger->debug("  Found matching closing sequence at position {}", end - right_str.size());
                     return {true, name, start, end, text_utils::get_substring(input, start, end)};
                 }
                 continue;
@@ -763,7 +763,7 @@ class MatchingStringPairParser : public CharParser {
             ++i;
         }
 
-        global_logger.debug("  Matching closing sequence not found");
+        global_logger->debug("  Matching closing sequence not found");
         return {false, name, start, input.size(), text_utils::get_substring(input, start, input.size())};
     }
 
@@ -780,13 +780,13 @@ class MatchingPairParser : public CharParser {
         : CharParser(name), left_parser_(std::move(left_parser)), right_parser_(std::move(right_parser)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         // Parse the left delimiter
         auto left_result = left_parser_->parse(input, start);
         if (!left_result.succeeded) {
-            global_logger.debug("  Left delimiter parse failed");
+            global_logger->debug("  Left delimiter parse failed");
             return {false, name, start, start, ""};
         }
 
@@ -854,7 +854,7 @@ class MatchingPairParser : public CharParser {
                     --depth;
                     i = inner_right.end;
                     if (depth == 0) {
-                        global_logger.debug("  Found matching closing delimiter at {}", i);
+                        global_logger->debug("  Found matching closing delimiter at {}", i);
                         return {true,
                                 name,
                                 start,
@@ -869,7 +869,7 @@ class MatchingPairParser : public CharParser {
             ++i;
         }
 
-        global_logger.debug("  Matching closing delimiter not found");
+        global_logger->debug("  Matching closing delimiter not found");
         return {false, name, start, input.size(), text_utils::get_substring(input, start, input.size())};
     }
 
@@ -888,20 +888,20 @@ class NestedStringPairParser : public CharParser {
     std::string left_str, right_str;
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         MatchingStringPairParser match_parser(name, left_str, right_str);
         ParseResult outer_result = match_parser.parse(input, start);
 
         if (!outer_result.succeeded) {
-            global_logger.debug("  Outer string parse failed");
+            global_logger->debug("  Outer string parse failed");
             return {false, name, start, start, ""};
         }
 
         // Extract inner content excluding outer delimiters
         if (outer_result.match.size() < left_str.size() + right_str.size()) {
-            global_logger.debug("  Match too small to contain delimiters");
+            global_logger->debug("  Match too small to contain delimiters");
             return {false, name, start, start, ""};
         }
 
@@ -909,12 +909,12 @@ class NestedStringPairParser : public CharParser {
             outer_result.match.substr(left_str.size(), outer_result.match.size() - left_str.size() - right_str.size());
         size_t inner_start = 0;
 
-        global_logger.debug("  Inner content to parse: {}", truncate(inner_text));
+        global_logger->debug("  Inner content to parse: {}", truncate(inner_text));
 
         ParseResult inner_result = inner_parser_->parse(inner_text, inner_start);
 
         if (!inner_result.succeeded) {
-            global_logger.debug("  Inner parse failed");
+            global_logger->debug("  Inner parse failed");
             return {false, name, start, start, ""};
         }
 
@@ -945,12 +945,12 @@ class UntilCharParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
-        global_logger.debug("Starting UntilCharParser at position {} , looking for any target "
-                            "character {}",
-                            start, (ignore_in_strings_and_chars_ ? " outside of strings and chars" : ""));
+        global_logger->debug("Starting UntilCharParser at position {} , looking for any target "
+                             "character {}",
+                             start, (ignore_in_strings_and_chars_ ? " outside of strings and chars" : ""));
 
         bool in_string = false;
         bool in_char = false;
@@ -958,47 +958,47 @@ class UntilCharParser : public CharParser {
 
         for (size_t i = start; i < input.size(); ++i) {
             char c = input[i];
-            global_logger.debug("  At position {}, char = {}", i, c);
+            global_logger->debug("  At position {}, char = {}", i, c);
 
             if (ignore_in_strings_and_chars_) {
                 if (escape_next) {
-                    global_logger.debug(" (escaped)");
+                    global_logger->debug(" (escaped)");
                     escape_next = false;
                     continue;
                 }
 
                 if (in_string) {
                     if (c == '\\') {
-                        global_logger.debug(" (backslash in string, escaping next)");
+                        global_logger->debug(" (backslash in string, escaping next)");
                         escape_next = true;
                     } else if (c == '"') {
-                        global_logger.debug(" (end of string)");
+                        global_logger->debug(" (end of string)");
                         in_string = false;
                     } else {
-                        global_logger.debug(" (inside string)");
+                        global_logger->debug(" (inside string)");
                     }
                     continue;
                 }
 
                 if (in_char) {
                     if (c == '\\') {
-                        global_logger.debug(" (backslash in char, escaping next)");
+                        global_logger->debug(" (backslash in char, escaping next)");
                         escape_next = true;
                     } else if (c == '\'') {
-                        global_logger.debug(" (end of char)");
+                        global_logger->debug(" (end of char)");
                         in_char = false;
                     } else {
-                        global_logger.debug(" (inside char)");
+                        global_logger->debug(" (inside char)");
                     }
                     continue;
                 }
 
                 if (c == '"') {
-                    global_logger.debug(" (begin string)");
+                    global_logger->debug(" (begin string)");
                     in_string = true;
                     continue;
                 } else if (c == '\'') {
-                    global_logger.debug(" (begin char)");
+                    global_logger->debug(" (begin char)");
                     in_char = true;
                     continue;
                 }
@@ -1006,15 +1006,15 @@ class UntilCharParser : public CharParser {
 
             if (std::find(targets.begin(), targets.end(), c) != targets.end()) {
                 size_t end = inclusive_ ? i + 1 : i;
-                global_logger.debug(" (found target, stopping at position {})", end);
+                global_logger->debug(" (found target, stopping at position {})", end);
                 return {true, name, start, end, text_utils::get_substring(input, start, end)};
             } else {
                 std::cout << "\n";
             }
         }
 
-        global_logger.debug("  None of the target characters found {}",
-                            (ignore_in_strings_and_chars_ ? " outside of strings or chars\n" : "\n"));
+        global_logger->debug("  None of the target characters found {}",
+                             (ignore_in_strings_and_chars_ ? " outside of strings or chars\n" : "\n"));
         return {false, name, start, start, ""};
     }
 
@@ -1055,37 +1055,37 @@ class RepeatingParser : public CharParser {
         size_t current = start;
         bool matched_once = false;
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         std::vector<ParseResult> results;
 
         while (true) {
-            global_logger.debug("0");
+            global_logger->debug("0");
             auto result = parser->parse(input, current);
-            global_logger.debug("1");
+            global_logger->debug("1");
             if (!result.succeeded) {
-                global_logger.debug("2");
+                global_logger->debug("2");
                 break;
             }
             results.push_back(result);
-            global_logger.debug("3");
+            global_logger->debug("3");
             if (result.end == current) {
-                global_logger.debug("4");
+                global_logger->debug("4");
                 // Prevent infinite loop if parser makes no progress
                 break;
             }
-            global_logger.debug("5");
+            global_logger->debug("5");
             current = result.end;
             matched_once = true;
         }
-        global_logger.debug("6");
+        global_logger->debug("6");
 
         if (matched_once) {
-            global_logger.debug("7");
+            global_logger->debug("7");
             return {true, name, start, current, text_utils::get_substring(input, start, current), results};
         } else {
-            global_logger.debug("8");
+            global_logger->debug("8");
             return {false, name, start, start, ""};
         }
     }
@@ -1100,21 +1100,21 @@ class AnyOfParser : public CharParser {
         : CharParser(name), parsers(std::move(sub_parsers)) {}
 
     ParseResult parse(const std::string &input, size_t start) const override {
-        // global_logger.debug("{} any of parser started at position {}", name, start);
+        // global_logger->debug("{} any of parser started at position {}", name, start);
 
         for (const auto &parser : parsers) {
-            // global_logger.debug("{} trying sub-parser '{}'", name, parser->name);
+            // global_logger->debug("{} trying sub-parser '{}'", name, parser->name);
             auto result = parser->parse(input, start);
             if (result.succeeded) {
-                // global_logger.debug("{} sub-parser '{}' succeeded with match '{}'", name, parser->name,
+                // global_logger->debug("{} sub-parser '{}' succeeded with match '{}'", name, parser->name,
                 // result.match);
                 return result;
             } else {
-                // global_logger.debug("{} sub-parser '{}' failed", name, parser->name);
+                // global_logger->debug("{} sub-parser '{}' failed", name, parser->name);
             }
         }
 
-        // global_logger.debug("{} parser failed: no sub-parsers matched at position {}", name, start);
+        // global_logger->debug("{} parser failed: no sub-parsers matched at position {}", name, start);
         return {false, name, start, start, ""};
     }
 
@@ -1129,7 +1129,7 @@ class SequenceParser : public CharParser {
 
     ParseResult parse(const std::string &input, size_t start) const override {
 
-        LogSection _(global_logger, fmt::format("{} parser", name), logging_enabled);
+        LogSection _(*global_logger, fmt::format("{} parser", name), logging_enabled);
         log_start_of_parser(name, input, start);
 
         size_t current = start;
@@ -1139,7 +1139,7 @@ class SequenceParser : public CharParser {
         for (const auto &parser : parsers_) {
             auto result = parser->parse(input, current);
             if (!result.succeeded) {
-                global_logger.debug("{}: did not succeed on parser {}", name, parser->name);
+                global_logger->debug("{}: did not succeed on parser {}", name, parser->name);
                 return result;
             }
             results.push_back(result);
@@ -1156,14 +1156,14 @@ class SequenceParser : public CharParser {
 
 inline void test_parser(const std::string &input, const CharParserPtr &parser) {
 
-    global_logger.info("Testing input: {}", input);
+    global_logger->info("Testing input: {}", input);
     auto result = parser->parse(input, 0);
     if (result.succeeded && result.end == input.size()) {
-        global_logger.info(">> SUCCESS: matched full string");
+        global_logger->info(">> SUCCESS: matched full string");
     } else if (result.succeeded) {
-        global_logger.info(">> PARTIAL MATCH: stopped at {}", result.end);
+        global_logger->info(">> PARTIAL MATCH: stopped at {}", result.end);
     } else {
-        global_logger.info(">> FAILURE: no match");
+        global_logger->info(">> FAILURE: no match");
     }
 }
 
